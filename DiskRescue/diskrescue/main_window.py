@@ -97,7 +97,7 @@ class PartitionMap(QWidget):
 
         # Keep the disk map full width; reduce only its height by 25%.
         base_bar = outer.adjusted(0, 28, 0, -43)
-        bar_height = max(int(base_bar.height() * 0.80), 42)
+        bar_height = max(int(base_bar.height() * 0.90), 42)
         bar_height = min(bar_height, base_bar.height())
         bar_y = base_bar.top() + (base_bar.height() - bar_height) // 2
         bar = QRect(base_bar.left(), bar_y, base_bar.width(), bar_height)
@@ -119,9 +119,9 @@ class PartitionMap(QWidget):
             if isinstance(used, (int, float)) and isinstance(free, (int, float)) and used + free > 0:
                 used_w = min(max(round(seg_w * max(0, used) / (used + free)), 0), seg_w)
                 painter.fillRect(x, bar.top(), used_w, bar.height(), QColor(self.COLORS[index % len(self.COLORS)]))
-                painter.fillRect(x + used_w, bar.top(), seg_w - used_w, bar.height(), QColor("#cbd5e1"))
+                painter.fillRect(x + used_w, bar.top(), seg_w - used_w, bar.height(), QColor("#FFFFFF"))
             else:
-                painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#7b8794"))
+                painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#B8BEC7"))
 
             drive = str(part.get("DriveLetter") or "").strip().upper()
             if drive and seg_w >= 72:
@@ -151,7 +151,7 @@ class PartitionMap(QWidget):
 
         painter.setPen(QColor(self.palette().color(self.foregroundRole())))
         painter.drawText(outer.left(), bar.bottom() + 19,
-                         "彩色 = 已用    浅灰 = 可用    深灰 = 未分配    灰色 = 未知")
+                         "彩色 = 已分配 / 已用    白色 = 可使用    深灰色 = 未分配    浅灰色 = 未知")
         painter.drawText(outer.left(), outer.bottom() - 2,
                          "分区标签见下方列表；无盘符分区会标注 EFI、恢复、MSR 保留或隐藏属性")
 
