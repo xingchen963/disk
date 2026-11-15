@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, QRect, QThread, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PySide6.QtWidgets import (
     QFrame, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
+    QPushButton, QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
@@ -45,7 +45,7 @@ class DiscoveryWorker(QThread):
 
 
 class DeviceReadWorker(QThread):
-    data_ready = Signal(object, object)
+    data_ready = Signal(object, object, str)
     failed = Signal(str)
 
     def __init__(self, device, cached_payload=None, parent=None):
@@ -56,18 +56,26 @@ class DeviceReadWorker(QThread):
     def run(self):
         try:
             payload = self.cached_payload
-            if payload is None:
-                payload = read_smart(self.device)
+            smart_error = self.device.smart_error or ""
+            if payload is None and self.device.smart_supported:
+                try:
+                    payload = read_smart(self.device)
+                except Exception as exc:
+                    smart_error = str(exc)
+            elif payload is None:
+                smart_error = smart_error or "该磁盘未提供可用的 SMART 直通接口。"
+
             layout = get_disk_layout(
-                serial=payload.get("serial_number", self.device.serial),
-                model=payload.get("model_name", self.device.model),
+                serial=(payload or {}).get("serial_number", self.device.serial),
+                model=(payload or {}).get("model_name", self.device.model),
                 capacity_bytes=int(
-                    payload.get("user_capacity", {}).get("bytes")
+                    (payload or {}).get("user_capacity", {}).get("bytes")
                     or self.device.capacity_bytes
                     or 0
                 ),
+                disk_number=self.device.windows_disk_number,
             )
-            self.data_ready.emit(payload, layout)
+            self.data_ready.emit(payload, layout, smart_error)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -101,6 +109,10 @@ class PartitionMap(QWidget):
         # "System", "Reserved" and "Basic". Use it as a reliable fallback when
         # the Storage provider omits optional GPT/boolean properties.
         part_type = str(part.get("Type") or "").strip().casefold()
+        detected_type = str(part.get("PartitionTypeName") or "").strip()
+        hidden = bool(part.get("IsHidden") or part.get("NoDefaultDriveLetter"))
+        if detected_type and detected_type != "未知分区类型":
+            return f"{detected_type}（隐藏 / 无盘符）" if hidden or not drive else detected_type
         if gpt == cls.EFI_GUID or part_type == "system" or (part.get("IsSystem") and not drive):
             return "EFI 引导分区"
         if gpt == cls.MSR_GUID or part_type == "reserved":
@@ -109,11 +121,11 @@ class PartitionMap(QWidget):
             return "Windows 恢复分区"
         if drive and (part.get("IsBoot") or part.get("IsSystem")):
             return "Windows 系统分区"
-        if part.get("IsHidden") or part.get("NoDefaultDriveLetter"):
-            return "隐藏分区"
+        if hidden or not drive:
+            return "隐藏 / 无盘符分区"
         if drive:
             return "数据分区"
-        return "无盘符分区"
+        return "未知分区类型"
 
     @classmethod
     def partition_name(cls, part):
@@ -244,7 +256,7 @@ class PartitionMap(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 自动读取 R7")
+        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 分区识别 R8")
         self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
@@ -259,6 +271,13 @@ class MainWindow(QMainWindow):
         banner.setWordWrap(True)
         banner.setStyleSheet("padding:9px 12px;background:#e8f2ff;color:#17365d;border-radius:6px;")
         root.addWidget(banner)
+
+        actions = QHBoxLayout()
+        self.scan_button = QPushButton("扫描磁盘")
+        self.scan_button.clicked.connect(self.scan)
+        actions.addWidget(self.scan_button)
+        actions.addStretch(1)
+        root.addLayout(actions)
 
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
@@ -309,7 +328,7 @@ class MainWindow(QMainWindow):
         self.partition_legend.setWordWrap(True)
         partition_layout.addWidget(self.partition_legend)
         self.partition_table = QTableWidget(0, 6)
-        self.partition_table.setHorizontalHeaderLabels(["盘符 / 分区类型", "卷标 / 文件系统", "分区容量", "已用", "可用", "使用率"])
+        self.partition_table.setHorizontalHeaderLabels(["盘符 / 分区类型", "卷标 / 文件系统识别", "分区容量", "已用", "可用", "使用率"])
         self.partition_table.horizontalHeader().setStretchLastSection(True)
         self.partition_table.setColumnWidth(0, 230)
         self.partition_table.setColumnWidth(1, 170)
@@ -340,21 +359,25 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         root.addWidget(split)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DiskRescue 开发版 · 自动识别 / 点击磁盘自动读取 · 分区图 R7")
+        self.statusBar().showMessage("DiskRescue 开发版 · 自动扫描 / GPT / MBR / APM / 文件系统识别 R8")
         QTimer.singleShot(0, self.scan)
 
     def scan(self):
         """Discover disks automatically in a worker thread; the UI remains responsive."""
         if self._discovery_thread is not None and self._discovery_thread.isRunning():
             return
+        if self._read_thread is not None and self._read_thread.isRunning():
+            self.status.setText("当前磁盘正在读取，请等待完成后再重新扫描。")
+            return
 
+        self.scan_button.setEnabled(False)
         self.devices = []
         self.device_list.blockSignals(True)
         self.device_list.clear()
         self.device_list.blockSignals(False)
         self.device_list.setEnabled(False)
         self._clear_views()
-        self.status.setText("正在自动识别磁盘并读取设备信息……")
+        self.status.setText("正在扫描 Windows 物理磁盘并检测 SMART……")
         self.statusBar().showMessage("正在识别磁盘，请稍候……")
 
         self._discovery_thread = DiscoveryWorker(self)
@@ -366,14 +389,28 @@ class MainWindow(QMainWindow):
 
     def _on_devices_found(self, devices):
         self.devices = devices or []
+        self.scan_button.setEnabled(True)
         self.device_list.blockSignals(True)
         self.device_list.clear()
         for device in self.devices:
             title = device.model or device.name or "未知型号"
             cap = human_bytes(device.capacity_bytes)
-            detail = device.protocol or device.device_type or "磁盘设备"
-            item = QListWidgetItem(f"{title}\n{cap}  ·  {detail}")
-            item.setToolTip(f"{device.name}\n序列号：{device.serial or '不可用'}")
+            disk_number = (
+                f"磁盘 {device.windows_disk_number}"
+                if device.windows_disk_number is not None else "SMART 独立设备"
+            )
+            table_style = device.partition_style or "分区表未知"
+            bus = device.bus_type or device.protocol or device.device_type or "总线未知"
+            smart_label = "SMART 可用" if device.smart_supported else "SMART 不可用"
+            item = QListWidgetItem(
+                f"{disk_number} · {title}\n{cap}  ·  {table_style}  ·  {bus}  ·  {smart_label}"
+            )
+            item.setToolTip(
+                f"{device.name}\n序列号：{device.serial or '不可用'}"
+                f"\n设备状态：{device.operational_status or '未知'}"
+                f"\n离线：{device.is_offline}；只读：{device.is_read_only}"
+                f"\nSMART：{device.smart_error or '可用'}"
+            )
             self.device_list.addItem(item)
         self.device_list.blockSignals(False)
         self.device_list.setEnabled(True)
@@ -390,6 +427,7 @@ class MainWindow(QMainWindow):
         self.selection_changed(0)
 
     def _on_discovery_failed(self, message):
+        self.scan_button.setEnabled(True)
         self.device_list.setEnabled(True)
         self.status.setText(f"磁盘识别失败：{message}")
         self.statusBar().showMessage("磁盘识别失败")
@@ -423,38 +461,62 @@ class MainWindow(QMainWindow):
         self._read_thread.finished.connect(self._read_thread.deleteLater)
         self._read_thread.start()
 
-    def _on_device_data_ready(self, payload, layout):
-        self.current_payload = payload
-        rows = summarize(payload)
+    def _on_device_data_ready(self, payload, layout, smart_error):
+        device = self._reading_device
+        payload = payload or {}
+        self.current_payload = payload or None
+
+        rows = summarize(payload) if payload else []
+        rows.extend([
+            ("Windows 磁盘编号", str(device.windows_disk_number) if device.windows_disk_number is not None else "未关联"),
+            ("分区表（Windows）", device.partition_style or "未知"),
+            ("总线类型", device.bus_type or device.protocol or "未知"),
+            ("设备状态", device.operational_status or "未知"),
+            ("是否离线", "是" if device.is_offline else "否"),
+            ("是否只读", "是" if device.is_read_only else "否"),
+            ("SMART 读取状态", "已读取" if payload else "不可用 / 未支持"),
+        ])
         self.details.setRowCount(len(rows))
         for index, (key, value) in enumerate(rows):
             self.details.setItem(index, 0, QTableWidgetItem(key))
             self.details.setItem(index, 1, QTableWidgetItem(value))
 
         log = payload.get("nvme_smart_health_information_log", {})
-        temp = payload.get("temperature", {}).get("current", log.get("temperature"))
-        power = payload.get("power_on_time", {}).get("hours", log.get("power_on_hours"))
-        read_units = log.get("data_units_read")
-        write_units = log.get("data_units_written")
-        metrics = {
-            "寿命已使用": f"{log['percentage_used']}%" if "percentage_used" in log else "设备未提供",
-            "可用备用空间": f"{log['available_spare']}%" if "available_spare" in log else "设备未提供",
-            "温度": f"{temp} °C" if temp is not None else "设备未提供",
-            "通电时间": f"{power:,} 小时" if isinstance(power, (int, float)) else "设备未提供",
-            "异常断电": f"{log['unsafe_shutdowns']:,} 次" if "unsafe_shutdowns" in log else "设备未提供",
-            "介质错误": f"{log['media_errors']:,} 次" if "media_errors" in log else "设备未提供",
-            "数据读取量": human_bytes(read_units * 512000) if isinstance(read_units, (int, float)) else "设备未提供",
-            "数据写入量": human_bytes(write_units * 512000) if isinstance(write_units, (int, float)) else "设备未提供",
-        }
+        if payload:
+            temp = payload.get("temperature", {}).get("current", log.get("temperature"))
+            power = payload.get("power_on_time", {}).get("hours", log.get("power_on_hours"))
+            read_units = log.get("data_units_read")
+            write_units = log.get("data_units_written")
+            metrics = {
+                "寿命已使用": f"{log['percentage_used']}%" if "percentage_used" in log else "设备未提供",
+                "可用备用空间": f"{log['available_spare']}%" if "available_spare" in log else "设备未提供",
+                "温度": f"{temp} °C" if temp is not None else "设备未提供",
+                "通电时间": f"{power:,} 小时" if isinstance(power, (int, float)) else "设备未提供",
+                "异常断电": f"{log['unsafe_shutdowns']:,} 次" if "unsafe_shutdowns" in log else "设备未提供",
+                "介质错误": f"{log['media_errors']:,} 次" if "media_errors" in log else "设备未提供",
+                "数据读取量": human_bytes(read_units * 512000) if isinstance(read_units, (int, float)) else "设备未提供",
+                "数据写入量": human_bytes(write_units * 512000) if isinstance(write_units, (int, float)) else "设备未提供",
+            }
+            self.raw.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            metrics = {name: "SMART 不支持 / 不可用" for name in self.health_labels}
+            self.raw.setPlainText(
+                "该物理磁盘已由 Windows 识别，但没有取得 SMART 数据。\n"
+                f"原因：{smart_error or '设备或 USB 转接桥未提供 SMART 直通'}\n\n"
+                "分区表和文件系统识别会独立进行，不会因为 SMART 不可用而跳过磁盘。"
+            )
         for name, value in metrics.items():
             self.health_labels[name].setText(value)
 
-        self.raw.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
         self.current_layout = layout
         self._show_partitions(layout, payload)
-        device_name = self._reading_device.model or self._reading_device.name
-        self.status.setText(f"读取完成：{device_name}。SMART 与分区信息均为只读查询。")
-        self.statusBar().showMessage(f"读取完成：{device_name}")
+        device_name = device.model or device.name
+        if payload:
+            status = f"读取完成：{device_name}。SMART 与分区检测均为只读。"
+        else:
+            status = f"已读取 {device_name} 的分区信息；SMART 不可用：{smart_error or '设备不支持'}"
+        self.status.setText(status)
+        self.statusBar().showMessage(status)
 
     def _on_device_read_failed(self, message):
         self.status.setText(f"读取失败：{message}")
@@ -478,6 +540,7 @@ class MainWindow(QMainWindow):
             label.setText("—")
 
     def _show_partitions(self, layout, payload):
+        payload = payload or {}
         if layout.get("error"):
             self.partition_title.setText("分区容量与空间使用（无法可靠对应）")
             self.partition_legend.setText(layout["error"])
@@ -488,10 +551,12 @@ class MainWindow(QMainWindow):
         parts = layout.get("partitions", [])
         windows_total = int(layout.get("disk_size") or 0)
         smart_total = int(payload.get("user_capacity", {}).get("bytes") or 0)
-        # Windows Get-Disk is authoritative for partition geometry; SMART capacity is shown separately.
         total = windows_total or smart_total
+        table_style = layout.get("partition_table_style") or layout.get("partition_style") or "未知"
+        table_source = layout.get("partition_table_source") or "未知来源"
         self.partition_title.setText(
-            f"物理磁盘容量：{human_bytes(total)}（Windows 磁盘 {layout.get('disk_number')}；匹配方式：{layout.get('match_method')}）"
+            f"物理磁盘容量：{human_bytes(total)}（Windows 磁盘 {layout.get('disk_number')}；"
+            f"分区表：{table_style}；识别来源：{table_source}）"
         )
         self.partition_map.set_data(parts, total)
 
@@ -510,11 +575,13 @@ class MainWindow(QMainWindow):
                 usage = f"{percent(used, used + free):.1f}%"
             else:
                 usage = "未挂载 / 未知"
-            drive = str(part.get("DriveLetter") or "").strip()
             letter = PartitionMap.partition_name(part)
-            label = part.get("FileSystemLabel") or part.get("Type") or "未格式化 / 未知"
-            fs = part.get("FileSystem") or "未知文件系统"
-            rows.append((letter, f"{label} / {fs}", human_bytes(size), human_bytes(used), human_bytes(free), usage))
+            partition_type = part.get("PartitionTypeName") or part.get("Type") or "未知分区类型"
+            label = part.get("FileSystemLabel") or part.get("PartitionName") or partition_type
+            fs = part.get("DetectedFileSystem") or part.get("FileSystem") or "未识别 / 未挂载"
+            fs_source = part.get("FileSystemSource") or ""
+            fs_detail = f"{label} / {fs}" + (f"（{fs_source}）" if fs_source and fs_source != "Windows Get-Volume" else "")
+            rows.append((letter, fs_detail, human_bytes(size), human_bytes(used), human_bytes(free), usage))
 
         self.partition_table.setRowCount(len(rows))
         for r, values in enumerate(rows):
@@ -543,7 +610,25 @@ class MainWindow(QMainWindow):
 
         unallocated = max(total - allocated, 0)
         smart_text = f"SMART 命名空间容量：{human_bytes(smart_total)}" if smart_total else ""
+        recognized_fs = sum(
+            1 for part in parts
+            if (part.get("DetectedFileSystem") or "").strip()
+            and "未识别" not in str(part.get("DetectedFileSystem"))
+        )
+        raw_warning = str(layout.get("raw_read_warning") or "").strip()
+        warning_text = (
+            f"\n原始扇区提示：{raw_warning}；部分隐藏分区的文件系统可能只能按分区类型推断。"
+            if raw_warning else ""
+        )
+        partition_warning = str(layout.get("partition_warning") or "").strip()
+        volume_warning = str(layout.get("volume_warning") or "").strip()
+        detail_warnings = "；".join(value for value in (partition_warning, volume_warning) if value)
+        if detail_warnings:
+            warning_text += f"\nWindows 分区/卷信息提示：{detail_warnings}"
         self.partition_legend.setText(
-            f"分区 {len(parts)} 个　已分配 {human_bytes(allocated)}　未分配 {human_bytes(unallocated)}\n"
+            f"分区表：{table_style}（{table_source}）　分区 {len(parts)} 个　"
+            f"已识别文件系统 {recognized_fs} 个\n"
+            f"已分配 {human_bytes(allocated)}　未分配 {human_bytes(unallocated)}　"
             f"已用 {human_bytes(known_used)}　可用 {human_bytes(known_free)}　{smart_text}"
+            f"{warning_text}"
         )
