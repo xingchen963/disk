@@ -132,13 +132,13 @@ def discover_devices() -> list[Device]:
     if not windows_disks:
         if smart_devices:
             return smart_devices
-        if windows_error and smart_scan_error:
-            raise SmartctlError(f"Windows 磁盘枚举失败：{windows_error}\nSMART 扫描失败：{smart_scan_error}")
         if windows_error:
+            if smart_scan_error:
+                raise SmartctlError(f"Windows 磁盘枚举失败：{windows_error}\nSMART 扫描失败：{smart_scan_error}")
             raise SmartctlError(f"Windows 磁盘枚举失败：{windows_error}")
-        if smart_scan_error and not exe:
-            raise SmartctlError(smart_scan_error)
-        return smart_devices
+        # Windows enumeration succeeded and returned an empty list: report no disks,
+        # even when smartmontools is not installed (SMART is optional now).
+        return []
 
     devices: list[Device] = []
     used_smart_indices: set[int] = set()

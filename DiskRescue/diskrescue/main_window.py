@@ -110,9 +110,9 @@ class PartitionMap(QWidget):
         # the Storage provider omits optional GPT/boolean properties.
         part_type = str(part.get("Type") or "").strip().casefold()
         detected_type = str(part.get("PartitionTypeName") or "").strip()
-        hidden = bool(part.get("IsHidden") or part.get("NoDefaultDriveLetter"))
+        hidden = bool(part.get("IsHidden"))
         if detected_type and detected_type != "未知分区类型":
-            return f"{detected_type}（隐藏 / 无盘符）" if hidden or not drive else detected_type
+            return f"{detected_type}（隐藏）" if hidden else detected_type
         if gpt == cls.EFI_GUID or part_type == "system" or (part.get("IsSystem") and not drive):
             return "EFI 引导分区"
         if gpt == cls.MSR_GUID or part_type == "reserved":
@@ -416,8 +416,8 @@ class MainWindow(QMainWindow):
         self.device_list.setEnabled(True)
 
         if not self.devices:
-            self.status.setText("没有发现可读取的磁盘设备。请确认 smartmontools 已正确安装。")
-            self.statusBar().showMessage("未发现可读取的磁盘")
+            self.status.setText("没有发现 Windows 可枚举的物理磁盘。请检查硬盘连接和存储控制器驱动。")
+            self.statusBar().showMessage("未发现物理磁盘")
             return
 
         self.status.setText(f"已识别 {len(self.devices)} 个磁盘。正在自动读取默认磁盘。")

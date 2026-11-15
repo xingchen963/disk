@@ -211,8 +211,8 @@ def _parse_gpt(raw_disk, sector_size: int) -> tuple[list[dict[str, Any]], str] |
                 "IsHidden": bool(attributes & (1 << 62)),
                 "IsSystem": False,
                 "IsBoot": False,
-                "NoDefaultDriveLetter": False,
-                "IsReadOnly": False,
+                "NoDefaultDriveLetter": bool(attributes & (1 << 63)),
+                "IsReadOnly": bool(attributes & (1 << 60)),
                 "IsOffline": False,
                 "_geometry_source": "GPT 原始分区表",
             })
@@ -504,7 +504,15 @@ def _merge_windows_partition(raw_part: dict[str, Any], windows_parts: list[dict[
             break
     merged = dict(raw_part)
     if match:
-        merged.update({key: value for key, value in match.items() if value not in (None, "")})
+        boolean_keys = {
+            "IsHidden", "IsSystem", "IsBoot", "NoDefaultDriveLetter",
+            "IsReadOnly", "IsOffline",
+        }
+        for key, value in match.items():
+            if key in boolean_keys:
+                merged[key] = bool(merged.get(key) or value)
+            elif value not in (None, ""):
+                merged[key] = value
         merged["Offset"] = offset
         merged["Size"] = size
         windows_parts.remove(match)
@@ -636,7 +644,8 @@ def get_disk_layout(
                 "HealthStatus": str(volume.get("HealthStatus") or ""),
                 "PartitionTableStyle": table_style,
                 "PartitionTypeName": partition_type_name or "未知分区类型",
-                "IsHidden": bool(part.get("IsHidden") or part.get("NoDefaultDriveLetter")) or not bool(drive),
+                "IsHidden": bool(part.get("IsHidden")),
+                "NoDefaultDriveLetter": bool(part.get("NoDefaultDriveLetter")),
                 "IsReadOnly": bool(part.get("IsReadOnly")),
                 "IsOffline": bool(part.get("IsOffline")) or bool(selected.get("IsOffline")),
             })
