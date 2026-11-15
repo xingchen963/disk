@@ -1,9 +1,9 @@
 import json
-from PySide6.QtCore import Qt, QRect
+from PySide6.QtCore import Qt, QRect, QThread, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPushButton, QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
+    QFrame, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+    QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
@@ -31,6 +31,45 @@ def percent(part, total):
     if total <= 0:
         return 0.0
     return max(0.0, min(100.0, part * 100.0 / total))
+
+
+class DiscoveryWorker(QThread):
+    devices_ready = Signal(object)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            self.devices_ready.emit(discover_devices())
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class DeviceReadWorker(QThread):
+    data_ready = Signal(object, object)
+    failed = Signal(str)
+
+    def __init__(self, device, cached_payload=None, parent=None):
+        super().__init__(parent)
+        self.device = device
+        self.cached_payload = cached_payload
+
+    def run(self):
+        try:
+            payload = self.cached_payload
+            if payload is None:
+                payload = read_smart(self.device)
+            layout = get_disk_layout(
+                serial=payload.get("serial_number", self.device.serial),
+                model=payload.get("model_name", self.device.model),
+                capacity_bytes=int(
+                    payload.get("user_capacity", {}).get("bytes")
+                    or self.device.capacity_bytes
+                    or 0
+                ),
+            )
+            self.data_ready.emit(payload, layout)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class PartitionMap(QWidget):
@@ -210,6 +249,9 @@ class MainWindow(QMainWindow):
         self.devices: list[Device] = []
         self.current_payload = None
         self.current_layout = None
+        self._discovery_thread = None
+        self._read_thread = None
+        self._reading_device = None
 
         central = QWidget()
         root = QVBoxLayout(central)
@@ -217,17 +259,6 @@ class MainWindow(QMainWindow):
         banner.setWordWrap(True)
         banner.setStyleSheet("padding:9px 12px;background:#e8f2ff;color:#17365d;border-radius:6px;")
         root.addWidget(banner)
-
-        actions = QHBoxLayout()
-        self.scan_button = QPushButton("扫描磁盘")
-        self.scan_button.clicked.connect(self.scan)
-        self.smart_button = QPushButton("刷新健康信息")
-        self.smart_button.clicked.connect(self.show_smart)
-        self.smart_button.setEnabled(False)
-        actions.addWidget(self.scan_button)
-        actions.addWidget(self.smart_button)
-        actions.addStretch(1)
-        root.addLayout(actions)
 
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
@@ -240,7 +271,7 @@ class MainWindow(QMainWindow):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(8, 0, 0, 0)
-        self.status = QLabel("请扫描磁盘。选择左侧硬盘查看健康状态和空间使用。")
+        self.status = QLabel("正在自动识别磁盘……")
         right_layout.addWidget(self.status)
 
         health_frame = QFrame()
@@ -309,37 +340,127 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         root.addWidget(split)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DiskRescue 开发版 · 分区图 R6 · 全宽 / 高度 68.85%")
-
-    def selection_changed(self, row):
-        valid = 0 <= row < len(self.devices)
-        self.smart_button.setEnabled(valid)
-        if valid:
-            self.show_smart()
+        self.statusBar().showMessage("DiskRescue 开发版 · 自动识别 / 点击磁盘自动读取 · 分区图 R7")
+        QTimer.singleShot(0, self.scan)
 
     def scan(self):
-        self.scan_button.setEnabled(False)
-        self.status.setText("正在识别硬盘并读取设备型号……")
+        """Discover disks automatically in a worker thread; the UI remains responsive."""
+        if self._discovery_thread is not None and self._discovery_thread.isRunning():
+            return
+
+        self.devices = []
+        self.device_list.blockSignals(True)
         self.device_list.clear()
+        self.device_list.blockSignals(False)
+        self.device_list.setEnabled(False)
         self._clear_views()
-        try:
-            self.devices = discover_devices()
-            for device in self.devices:
-                title = device.model or "未知型号"
-                cap = human_bytes(device.capacity_bytes)
-                item = QListWidgetItem(f"{title}\n{cap}  ·  {device.protocol or device.device_type}")
-                item.setToolTip(f"{device.name}\n序列号：{device.serial or '不可用'}")
-                self.device_list.addItem(item)
-            self.status.setText(f"识别到 {len(self.devices)} 个设备。左侧显示设备报告容量。")
-            if self.devices:
-                self.device_list.setCurrentRow(0)
-            else:
-                self.status.setText("未发现支持 SMART 查询的设备。")
-        except Exception as exc:
-            QMessageBox.warning(self, "设备扫描", str(exc))
-            self.status.setText("扫描未完成。")
-        finally:
-            self.scan_button.setEnabled(True)
+        self.status.setText("正在自动识别磁盘并读取设备信息……")
+        self.statusBar().showMessage("正在识别磁盘，请稍候……")
+
+        self._discovery_thread = DiscoveryWorker(self)
+        self._discovery_thread.devices_ready.connect(self._on_devices_found)
+        self._discovery_thread.failed.connect(self._on_discovery_failed)
+        self._discovery_thread.finished.connect(self._on_discovery_thread_finished)
+        self._discovery_thread.start()
+
+    def _on_devices_found(self, devices):
+        self.devices = devices or []
+        self.device_list.blockSignals(True)
+        self.device_list.clear()
+        for device in self.devices:
+            title = device.model or device.name or "未知型号"
+            cap = human_bytes(device.capacity_bytes)
+            detail = device.protocol or device.device_type or "磁盘设备"
+            item = QListWidgetItem(f"{title}\n{cap}  ·  {detail}")
+            item.setToolTip(f"{device.name}\n序列号：{device.serial or '不可用'}")
+            self.device_list.addItem(item)
+        self.device_list.blockSignals(False)
+        self.device_list.setEnabled(True)
+
+        if not self.devices:
+            self.status.setText("没有发现可读取的磁盘设备。请确认 smartmontools 已正确安装。")
+            self.statusBar().showMessage("未发现可读取的磁盘")
+            return
+
+        self.status.setText(f"已识别 {len(self.devices)} 个磁盘。选择左侧磁盘即可自动读取。")
+        self.device_list.setCurrentRow(0)
+        self.selection_changed(0)
+
+    def _on_discovery_failed(self, message):
+        self.device_list.setEnabled(True)
+        self.status.setText(f"磁盘识别失败：{message}")
+        self.statusBar().showMessage("磁盘识别失败")
+
+    def _on_discovery_thread_finished(self):
+        self._discovery_thread = None
+
+    def selection_changed(self, row):
+        if row < 0 or row >= len(self.devices):
+            return
+        if self._read_thread is not None and self._read_thread.isRunning():
+            return
+
+        device = self.devices[row]
+        self._reading_device = device
+        self.device_list.setEnabled(False)
+        self._clear_views()
+        self.status.setText(f"正在读取 {device.model or device.name} 的健康和分区信息……")
+        self.statusBar().showMessage(f"正在读取：{device.model or device.name}")
+
+        # Discovery already queried SMART to obtain each disk's identity.
+        # Reuse that first result once, avoiding a duplicate SMART command on initial selection.
+        cached_payload = getattr(device, "cached_payload", None)
+        if cached_payload is not None:
+            device.cached_payload = None
+
+        self._read_thread = DeviceReadWorker(device, cached_payload, self)
+        self._read_thread.data_ready.connect(self._on_device_data_ready)
+        self._read_thread.failed.connect(self._on_device_read_failed)
+        self._read_thread.finished.connect(self._on_read_thread_finished)
+        self._read_thread.start()
+
+    def _on_device_data_ready(self, payload, layout):
+        self.current_payload = payload
+        rows = summarize(payload)
+        self.details.setRowCount(len(rows))
+        for index, (key, value) in enumerate(rows):
+            self.details.setItem(index, 0, QTableWidgetItem(key))
+            self.details.setItem(index, 1, QTableWidgetItem(value))
+
+        log = payload.get("nvme_smart_health_information_log", {})
+        temp = payload.get("temperature", {}).get("current", log.get("temperature"))
+        power = payload.get("power_on_time", {}).get("hours", log.get("power_on_hours"))
+        read_units = log.get("data_units_read")
+        write_units = log.get("data_units_written")
+        metrics = {
+            "寿命已使用": f"{log['percentage_used']}%" if "percentage_used" in log else "设备未提供",
+            "可用备用空间": f"{log['available_spare']}%" if "available_spare" in log else "设备未提供",
+            "温度": f"{temp} °C" if temp is not None else "设备未提供",
+            "通电时间": f"{power:,} 小时" if isinstance(power, (int, float)) else "设备未提供",
+            "异常断电": f"{log['unsafe_shutdowns']:,} 次" if "unsafe_shutdowns" in log else "设备未提供",
+            "介质错误": f"{log['media_errors']:,} 次" if "media_errors" in log else "设备未提供",
+            "数据读取量": human_bytes(read_units * 512000) if isinstance(read_units, (int, float)) else "设备未提供",
+            "数据写入量": human_bytes(write_units * 512000) if isinstance(write_units, (int, float)) else "设备未提供",
+        }
+        for name, value in metrics.items():
+            self.health_labels[name].setText(value)
+
+        self.raw.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
+        self.current_layout = layout
+        self._show_partitions(layout, payload)
+        device_name = self._reading_device.model or self._reading_device.name
+        self.status.setText(f"读取完成：{device_name}。SMART 与分区信息均为只读查询。")
+        self.statusBar().showMessage(f"读取完成：{device_name}")
+
+    def _on_device_read_failed(self, message):
+        self.status.setText(f"读取失败：{message}")
+        self.statusBar().showMessage("磁盘信息读取失败")
+        self.raw.setPlainText(message)
+
+    def _on_read_thread_finished(self):
+        self.device_list.setEnabled(True)
+        self._read_thread = None
+        self._reading_device = None
 
     def _clear_views(self):
         self.current_payload = None
@@ -347,59 +468,10 @@ class MainWindow(QMainWindow):
         self.details.setRowCount(0)
         self.partition_table.setRowCount(0)
         self.partition_map.set_data([], 0)
-        self.partition_legend.setText("选择左侧硬盘后显示分区")
+        self.partition_legend.setText("正在读取所选磁盘的分区信息……")
         self.raw.clear()
         for label in self.health_labels.values():
             label.setText("—")
-
-    def show_smart(self):
-        row = self.device_list.currentRow()
-        if row < 0 or row >= len(self.devices):
-            return
-        device = self.devices[row]
-        self.smart_button.setEnabled(False)
-        self.status.setText(f"正在读取 {device.model or device.name} 的健康和分区信息……")
-        try:
-            payload = read_smart(device)
-            self.current_payload = payload
-            rows = summarize(payload)
-            self.details.setRowCount(len(rows))
-            for index, (key, value) in enumerate(rows):
-                self.details.setItem(index, 0, QTableWidgetItem(key))
-                self.details.setItem(index, 1, QTableWidgetItem(value))
-
-            log = payload.get("nvme_smart_health_information_log", {})
-            temp = payload.get("temperature", {}).get("current", log.get("temperature"))
-            power = payload.get("power_on_time", {}).get("hours", log.get("power_on_hours"))
-            read_units = log.get("data_units_read")
-            write_units = log.get("data_units_written")
-            metrics = {
-                "寿命已使用": f"{log['percentage_used']}%" if "percentage_used" in log else "设备未提供",
-                "可用备用空间": f"{log['available_spare']}%" if "available_spare" in log else "设备未提供",
-                "温度": f"{temp} °C" if temp is not None else "设备未提供",
-                "通电时间": f"{power:,} 小时" if isinstance(power, (int, float)) else "设备未提供",
-                "异常断电": f"{log['unsafe_shutdowns']:,} 次" if "unsafe_shutdowns" in log else "设备未提供",
-                "介质错误": f"{log['media_errors']:,} 次" if "media_errors" in log else "设备未提供",
-                "数据读取量": human_bytes(read_units * 512000) if isinstance(read_units, (int, float)) else "设备未提供",
-                "数据写入量": human_bytes(write_units * 512000) if isinstance(write_units, (int, float)) else "设备未提供",
-            }
-            for name, value in metrics.items():
-                self.health_labels[name].setText(value)
-
-            self.raw.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
-            layout = get_disk_layout(
-                serial=payload.get("serial_number", device.serial),
-                model=payload.get("model_name", device.model),
-                capacity_bytes=int(payload.get("user_capacity", {}).get("bytes") or device.capacity_bytes or 0),
-            )
-            self.current_layout = layout
-            self._show_partitions(layout, payload)
-            self.status.setText(f"读取完成：{device.model or device.name}。SMART 与分区信息均为只读查询。")
-        except Exception as exc:
-            QMessageBox.warning(self, "读取失败", str(exc))
-            self.status.setText(f"读取失败：{exc}")
-        finally:
-            self.smart_button.setEnabled(True)
 
     def _show_partitions(self, layout, payload):
         if layout.get("error"):

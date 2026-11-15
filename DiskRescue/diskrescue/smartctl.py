@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -13,10 +14,24 @@ class Device:
     model: str = ""
     serial: str = ""
     capacity_bytes: int = 0
+    cached_payload: dict[str, Any] | None = None
 
 
 class SmartctlError(RuntimeError):
     pass
+
+
+def _hidden_subprocess_options() -> dict[str, Any]:
+    """Prevent smartctl console windows from flashing in the windowed app."""
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+    }
 
 
 def smartctl_path() -> str | None:
@@ -25,7 +40,14 @@ def smartctl_path() -> str | None:
 
 def _run_json(command: list[str], timeout: int = 60) -> tuple[dict[str, Any], subprocess.CompletedProcess]:
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            **_hidden_subprocess_options(),
+        )
     except subprocess.TimeoutExpired as exc:
         raise SmartctlError(f"命令执行超时：{' '.join(command)}") from exc
     except OSError as exc:
@@ -64,6 +86,7 @@ def discover_devices() -> list[Device]:
                 or info.get("nvme_total_capacity")
                 or 0
             )
+            device.cached_payload = info
         except Exception:
             # Keep the device visible even when identity/SMART passthrough fails.
             pass

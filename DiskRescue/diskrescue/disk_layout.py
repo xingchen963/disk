@@ -1,6 +1,20 @@
 import json
+import os
 import subprocess
 from typing import Any
+
+
+def _hidden_subprocess_options() -> dict[str, Any]:
+    """Prevent console windows from flashing when the GUI launches PowerShell."""
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+    }
 
 
 def _run_powershell_json(command: str, timeout: int = 20) -> list[dict[str, Any]]:
@@ -15,6 +29,7 @@ def _run_powershell_json(command: str, timeout: int = 20) -> list[dict[str, Any]
         text=True,
         timeout=timeout,
         check=False,
+        **_hidden_subprocess_options(),
     )
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"退出码 {proc.returncode}"
