@@ -97,7 +97,7 @@ class PartitionMap(QWidget):
 
         # Keep the disk map full width; reduce only its height by 25%.
         base_bar = outer.adjusted(0, 28, 0, -43)
-        bar_height = max(int(base_bar.height() * 0.75), 42)
+        bar_height = max(int(base_bar.height() * 0.80), 42)
         bar_height = min(bar_height, base_bar.height())
         bar_y = base_bar.top() + (base_bar.height() - bar_height) // 2
         bar = QRect(base_bar.left(), bar_y, base_bar.width(), bar_height)
