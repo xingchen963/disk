@@ -1,6 +1,6 @@
 import json
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush
+from PySide6.QtCore import Qt, QRect
+from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QMessageBox, QPushButton, QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
@@ -95,7 +95,15 @@ class PartitionMap(QWidget):
         painter.setPen(QColor(self.palette().color(self.foregroundRole())))
         painter.drawText(outer.left(), outer.top() + 17, f"磁盘总容量：{human_bytes(self.total)}")
 
-        bar = outer.adjusted(0, 28, 0, -43)
+        # Keep the disk map visually compact: 75% of the previous width and height.
+        base_bar = outer.adjusted(0, 28, 0, -43)
+        bar_width = max(int(base_bar.width() * 0.75), 160)
+        bar_height = max(int(base_bar.height() * 0.75), 42)
+        bar_width = min(bar_width, base_bar.width())
+        bar_height = min(bar_height, base_bar.height())
+        bar_x = base_bar.left() + (base_bar.width() - bar_width) // 2
+        bar_y = base_bar.top() + (base_bar.height() - bar_height) // 2
+        bar = QRect(bar_x, bar_y, bar_width, bar_height)
         x = bar.left()
         width_total = bar.width()
         allocated = 0
@@ -118,12 +126,27 @@ class PartitionMap(QWidget):
             else:
                 painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#7b8794"))
 
-            if seg_w >= 54:
-                painter.setPen(QColor("#ffffff" if isinstance(used, (int, float)) else "#172b4d"))
-                drive = str(part.get("DriveLetter") or "").strip().upper()
-                label = f"{drive}:" if drive else f"分区{part.get('PartitionNumber', index + 1)}"
-                painter.drawText(x + 2, bar.top(), max(seg_w - 4, 1), bar.height(),
-                                 Qt.AlignmentFlag.AlignCenter, label)
+            drive = str(part.get("DriveLetter") or "").strip().upper()
+            if drive and seg_w >= 72:
+                # Large, high-contrast black drive-letter label on a light badge.
+                label = f"{drive}:"
+                label_font = QFont(painter.font())
+                label_font.setPointSize(17)
+                label_font.setBold(True)
+                painter.setFont(label_font)
+                badge_width = min(max(66, painter.fontMetrics().horizontalAdvance(label) + 24), seg_w - 8)
+                badge_height = min(34, max(26, bar.height() - 8))
+                badge = QRect(
+                    x + (seg_w - badge_width) // 2,
+                    bar.top() + (bar.height() - badge_height) // 2,
+                    badge_width,
+                    badge_height,
+                )
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#FFFFFF"))
+                painter.drawRoundedRect(badge, 7, 7)
+                painter.setPen(QColor("#000000"))
+                painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
             x += seg_w
             if x > bar.right():
                 break
