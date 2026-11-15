@@ -244,7 +244,7 @@ class PartitionMap(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 分区图 R6")
+        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 自动读取 R7")
         self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
@@ -361,6 +361,7 @@ class MainWindow(QMainWindow):
         self._discovery_thread.devices_ready.connect(self._on_devices_found)
         self._discovery_thread.failed.connect(self._on_discovery_failed)
         self._discovery_thread.finished.connect(self._on_discovery_thread_finished)
+        self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
         self._discovery_thread.start()
 
     def _on_devices_found(self, devices):
@@ -382,8 +383,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("未发现可读取的磁盘")
             return
 
-        self.status.setText(f"已识别 {len(self.devices)} 个磁盘。选择左侧磁盘即可自动读取。")
+        self.status.setText(f"已识别 {len(self.devices)} 个磁盘。正在自动读取默认磁盘。")
+        self.device_list.blockSignals(True)
         self.device_list.setCurrentRow(0)
+        self.device_list.blockSignals(False)
         self.selection_changed(0)
 
     def _on_discovery_failed(self, message):
@@ -417,6 +420,7 @@ class MainWindow(QMainWindow):
         self._read_thread.data_ready.connect(self._on_device_data_ready)
         self._read_thread.failed.connect(self._on_device_read_failed)
         self._read_thread.finished.connect(self._on_read_thread_finished)
+        self._read_thread.finished.connect(self._read_thread.deleteLater)
         self._read_thread.start()
 
     def _on_device_data_ready(self, payload, layout):
