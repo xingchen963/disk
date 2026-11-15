@@ -95,20 +95,24 @@ class PartitionMap(QWidget):
         painter.setPen(QColor(self.palette().color(self.foregroundRole())))
         painter.drawText(outer.left(), outer.top() + 17, f"磁盘总容量：{human_bytes(self.total)}")
 
-        # Keep the disk map full width; reduce only its height by 25%.
+        # Full width; bar height is 90% of the available drawing slot.
         base_bar = outer.adjusted(0, 28, 0, -43)
         bar_height = max(int(base_bar.height() * 0.90), 42)
         bar_height = min(bar_height, base_bar.height())
         bar_y = base_bar.top() + (base_bar.height() - bar_height) // 2
         bar = QRect(base_bar.left(), bar_y, base_bar.width(), bar_height)
+
+        # Dark-gray base is the unallocated area; partition segments are painted over it.
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#454d5a"))
+        painter.drawRect(bar)
+
         x = bar.left()
         width_total = bar.width()
-        allocated = 0
         for index, part in enumerate(self.parts):
             size = max(int(part.get("Size") or 0), 0)
             if not size:
                 continue
-            allocated += size
             seg_w = max(1, round(width_total * size / self.total))
             seg_w = min(seg_w, max(0, bar.right() - x + 1))
             if seg_w <= 0:
@@ -116,16 +120,37 @@ class PartitionMap(QWidget):
 
             used = part.get("SizeUsed")
             free = part.get("SizeRemaining")
-            if isinstance(used, (int, float)) and isinstance(free, (int, float)) and used + free > 0:
-                used_w = min(max(round(seg_w * max(0, used) / (used + free)), 0), seg_w)
-                painter.fillRect(x, bar.top(), used_w, bar.height(), QColor(self.COLORS[index % len(self.COLORS)]))
-                painter.fillRect(x + used_w, bar.top(), seg_w - used_w, bar.height(), QColor("#FFFFFF"))
+            known = (
+                isinstance(used, (int, float))
+                and isinstance(free, (int, float))
+                and used >= 0
+                and free >= 0
+                and used + free > 0
+            )
+            if known:
+                used_w = min(max(round(seg_w * used / (used + free)), 0), seg_w)
+                # Color = used/allocated portion; white = free/usable portion.
+                painter.fillRect(
+                    x, bar.top(), used_w, bar.height(),
+                    QColor(self.COLORS[index % len(self.COLORS)])
+                )
+                painter.fillRect(
+                    x + used_w, bar.top(), seg_w - used_w, bar.height(),
+                    QColor("#FFFFFF")
+                )
+                if 0 < used_w < seg_w:
+                    painter.setPen(QPen(QColor("#606873"), 1))
+                    painter.drawLine(x + used_w, bar.top(), x + used_w, bar.bottom())
             else:
+                # Light gray = partition found, but used/free split unavailable.
                 painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#B8BEC7"))
+
+            # A visible separator distinguishes adjacent partitions and white free space.
+            painter.setPen(QPen(QColor("#505866"), 1))
+            painter.drawLine(x, bar.top(), x, bar.bottom())
 
             drive = str(part.get("DriveLetter") or "").strip().upper()
             if drive and seg_w >= 72:
-                # Large, bold, pure-black drive-letter text with no background fill.
                 label = f"{drive}:"
                 label_font = QFont(painter.font())
                 label_font.setPointSize(17)
@@ -137,29 +162,50 @@ class PartitionMap(QWidget):
                     Qt.AlignmentFlag.AlignCenter,
                     label,
                 )
+
             x += seg_w
             if x > bar.right():
                 break
 
-        unallocated = max(self.total - allocated, 0)
-        if unallocated and x <= bar.right():
-            painter.fillRect(x, bar.top(), bar.right() - x + 1, bar.height(), QColor("#454d5a"))
-
-        painter.setPen(QPen(QColor("#9aa4b2"), 1))
+        # Draw a dark outline around the full-width map.
+        painter.setPen(QPen(QColor("#39414c"), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(bar, 5, 5)
+        painter.drawRect(bar)
+
+        # Use visible color swatches instead of a low-contrast plain-text legend.
+        legend_font = QFont(painter.font())
+        legend_font.setPointSize(9)
+        legend_font.setBold(False)
+        painter.setFont(legend_font)
+        fm = painter.fontMetrics()
+        legend_y = bar.bottom() + 8
+        legend_items = [
+            (self.COLORS[0], "彩色：已分配 / 已用", False),
+            ("#FFFFFF", "白色：可使用", True),
+            ("#454d5a", "深灰：未分配", False),
+            ("#B8BEC7", "浅灰：未知", False),
+        ]
+        legend_x = outer.left()
+        for color, label, needs_outline in legend_items:
+            swatch = QRect(legend_x, legend_y, 12, 12)
+            painter.fillRect(swatch, QColor(color))
+            painter.setPen(QPen(QColor("#596273" if needs_outline or color == "#454d5a" else color), 1))
+            painter.drawRect(swatch)
+            painter.setPen(QColor(self.palette().color(self.foregroundRole())))
+            painter.drawText(legend_x + 17, legend_y + fm.ascent(), label)
+            legend_x += 17 + fm.horizontalAdvance(label) + 20
 
         painter.setPen(QColor(self.palette().color(self.foregroundRole())))
-        painter.drawText(outer.left(), bar.bottom() + 19,
-                         "彩色 = 已分配 / 已用    白色 = 可使用    深灰色 = 未分配    浅灰色 = 未知")
-        painter.drawText(outer.left(), outer.bottom() - 2,
-                         "分区标签见下方列表；无盘符分区会标注 EFI、恢复、MSR 保留或隐藏属性")
+        painter.drawText(
+            outer.left(), outer.bottom() - 2,
+            "分区标签见下方列表；无盘符分区会标注 EFI、恢复、MSR 保留或隐藏属性"
+        )
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援")
+        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 分区图 R3")
         self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
@@ -263,7 +309,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         root.addWidget(split)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DiskRescue 开发版")
+        self.statusBar().showMessage("DiskRescue 开发版 · 分区图 R3 · 全宽 / 高度 90%")
 
     def selection_changed(self, row):
         valid = 0 <= row < len(self.devices)
