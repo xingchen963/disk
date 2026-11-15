@@ -71,7 +71,7 @@ def get_disk_layout(serial: str, model: str = "", capacity_bytes: int = 0) -> di
 
     try:
         all_partitions = _run_powershell_json(
-            "Get-Partition | Select-Object DiskNumber,PartitionNumber,DriveLetter,AccessPaths,Type,Size | ConvertTo-Json -Depth 3 -Compress"
+            "Get-Partition | Select-Object DiskNumber,PartitionNumber,DriveLetter,AccessPaths,Type,Size,GptType,MbrType,IsHidden,IsSystem,IsBoot,NoDefaultDriveLetter,IsReadOnly,IsOffline | ConvertTo-Json -Depth 3 -Compress"
         )
     except Exception as exc:
         return {
@@ -119,6 +119,14 @@ def get_disk_layout(serial: str, model: str = "", capacity_bytes: int = 0) -> di
             "DriveLetter": drive_letter,
             "AccessPaths": access_paths,
             "Type": str(part.get("Type") or ""),
+            "GptType": str(part.get("GptType") or ""),
+            "MbrType": str(part.get("MbrType") or ""),
+            "IsHidden": bool(part.get("IsHidden")),
+            "IsSystem": bool(part.get("IsSystem")),
+            "IsBoot": bool(part.get("IsBoot")),
+            "NoDefaultDriveLetter": bool(part.get("NoDefaultDriveLetter")),
+            "IsReadOnly": bool(part.get("IsReadOnly")),
+            "IsOffline": bool(part.get("IsOffline")),
             "Size": int(part.get("Size") or 0),
             "FileSystem": str(volume.get("FileSystem") or ""),
             "FileSystemLabel": str(volume.get("FileSystemLabel") or ""),
