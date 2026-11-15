@@ -3,31 +3,40 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPushButton, QProgressBar, QSplitter, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget, QGridLayout,
+    QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
-from .smartctl import Device, SmartctlError, discover_devices, read_smart, summarize
+from .smartctl import Device, discover_devices, read_smart, summarize
 from .disk_layout import get_disk_layout
 
 
 def human_bytes(value):
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, (int, float)) or value < 0:
         return "未知"
     amount = float(value)
     for unit in ("B", "KB", "GB", "TB", "PB"):
         if amount < 1000 or unit == "PB":
-            return f"{amount:,.1f} {unit}" if unit != "B" else f"{amount:,.0f} B"
+            return f"{amount:,.2f} {unit}" if unit != "B" else f"{amount:,.0f} B"
         amount /= 1000
-    return f"{amount:,.1f} PB"
+    return f"{amount:,.2f} PB"
+
+
+def percent(part, total):
+    if total <= 0:
+        return 0.0
+    return max(0.0, min(100.0, part * 100.0 / total))
 
 
 class PartitionMap(QWidget):
+    """One disk-wide map: each partition is sized by capacity and split into used/free."""
+    COLORS = ["#3678d4", "#229b73", "#d49b32", "#8a70d6", "#cf6b91", "#319da0"]
+
     def __init__(self):
         super().__init__()
         self.parts = []
         self.total = 0
-        self.setMinimumHeight(54)
+        self.setMinimumHeight(76)
 
     def set_data(self, parts, total):
         self.parts = parts or []
@@ -37,36 +46,55 @@ class PartitionMap(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(2, 8, -2, -8)
-        painter.setPen(QPen(QColor("#667085"), 1))
-        painter.setBrush(QBrush(QColor("#252a34")))
-        painter.drawRoundedRect(rect, 7, 7)
+        outer = self.rect().adjusted(2, 5, -2, -5)
         if self.total <= 0:
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "暂无分区布局信息")
+            painter.drawText(outer, Qt.AlignmentFlag.AlignCenter, "暂无可用的分区容量信息")
             return
-        x = rect.left()
-        usable = rect.width()
-        palette = ["#4f8cff", "#22a06b", "#e5a000", "#8b70d6", "#d16b8f", "#4ba6a6"]
-        for index, part in enumerate(self.parts):
-            size = max(int(part.get("Size") or 0), 0)
-            if size <= 0:
+
+        bar = outer.adjusted(0, 18, 0, -20)
+        x = bar.left()
+        width_total = bar.width()
+        allocated = 0
+        for p in self.parts:
+            size = max(int(p.get("Size") or 0), 0)
+            if not size:
                 continue
-            width = max(1, round(usable * size / self.total))
-            color = QColor(palette[index % len(palette)])
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(color))
-            painter.drawRect(x, rect.top() + 1, min(width, rect.right() - x + 1), rect.height() - 2)
-            x += width
-        painter.setPen(QPen(QColor("#aab4c3"), 1))
+            allocated += size
+            seg_w = max(1, round(width_total * size / self.total))
+            seg_w = min(seg_w, bar.right() - x + 1)
+            used = p.get("SizeUsed")
+            free = p.get("SizeRemaining")
+            if isinstance(used, (int, float)) and isinstance(free, (int, float)) and used + free > 0:
+                used_w = round(seg_w * max(0, used) / (used + free))
+                used_w = min(max(used_w, 0), seg_w)
+                painter.fillRect(x, bar.top(), used_w, bar.height(), QColor(self.COLORS[len([q for q in self.parts[:self.parts.index(p)]]) % len(self.COLORS)]))
+                painter.fillRect(x + used_w, bar.top(), seg_w - used_w, bar.height(), QColor("#cbd5e1"))
+            else:
+                painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#7b8794"))
+            x += seg_w
+            if x > bar.right():
+                break
+
+        unallocated = max(self.total - allocated, 0)
+        if unallocated:
+            remain_w = max(0, bar.right() - x + 1)
+            if remain_w:
+                painter.fillRect(x, bar.top(), remain_w, bar.height(), QColor("#454d5a"))
+
+        painter.setPen(QPen(QColor("#9aa4b2"), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect, 7, 7)
+        painter.drawRoundedRect(bar, 5, 5)
+
+        painter.setPen(QColor(self.palette().color(self.foregroundRole())))
+        painter.drawText(outer.left(), outer.top() + 13, f"磁盘总容量 {human_bytes(self.total)}")
+        painter.drawText(outer.left(), outer.bottom() - 2, "彩色 = 已用    浅灰 = 可用    深灰 = 未分配 / 未知")
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DiskRescue — 硬盘检测与数据救援")
-        self.resize(1180, 820)
+        self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
         self.current_layout = None
@@ -92,85 +120,74 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
         self.device_list = QListWidget()
-        self.device_list.setMinimumWidth(230)
-        self.device_list.setMaximumWidth(330)
+        self.device_list.setMinimumWidth(240)
+        self.device_list.setMaximumWidth(340)
         self.device_list.currentRowChanged.connect(self.selection_changed)
         split.addWidget(self.device_list)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(8, 0, 0, 0)
-        self.status = QLabel("请扫描磁盘。选择左侧硬盘查看健康状态和分区使用情况。")
+        self.status = QLabel("请扫描磁盘。选择左侧硬盘查看健康状态和空间使用。")
         right_layout.addWidget(self.status)
 
         health_frame = QFrame()
         health_frame.setFrameShape(QFrame.Shape.StyledPanel)
         health_layout = QVBoxLayout(health_frame)
-        health_title = QLabel("硬盘健康概览")
-        health_title.setStyleSheet("font-weight:600;font-size:16px;")
-        health_layout.addWidget(health_title)
+        health_layout.addWidget(QLabel("硬盘健康概览"))
         self.health_grid = QGridLayout()
-        self.health_grid.setHorizontalSpacing(16)
-        self.health_grid.setVerticalSpacing(8)
         self.health_labels = {}
-        metric_names = [
-            ("寿命已使用", "—"), ("可用备用空间", "—"),
-            ("温度", "—"), ("通电时间", "—"),
-            ("异常断电", "—"), ("介质错误", "—"),
-            ("数据读取量", "—"), ("数据写入量", "—"),
-        ]
-        for index, (name, initial) in enumerate(metric_names):
+        names = ["寿命已使用", "可用备用空间", "温度", "通电时间", "异常断电", "介质错误", "数据读取量", "数据写入量"]
+        for i, name in enumerate(names):
             card = QFrame()
             card.setStyleSheet("QFrame{background:#f3f5f8;border:1px solid #d9dee7;border-radius:8px;}")
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(10, 7, 10, 7)
-            name_label = QLabel(name)
-            name_label.setStyleSheet("color:#667085;border:0;background:transparent;")
-            value_label = QLabel(initial)
-            value_label.setStyleSheet("font-size:18px;font-weight:600;color:#172b4d;border:0;background:transparent;")
-            card_layout.addWidget(name_label)
-            card_layout.addWidget(value_label)
-            self.health_labels[name] = value_label
-            self.health_grid.addWidget(card, index // 4, index % 4)
+            title = QLabel(name)
+            title.setStyleSheet("color:#667085;border:0;background:transparent;")
+            value = QLabel("—")
+            value.setStyleSheet("font-size:18px;font-weight:600;color:#172b4d;border:0;background:transparent;")
+            card_layout.addWidget(title)
+            card_layout.addWidget(value)
+            self.health_labels[name] = value
+            self.health_grid.addWidget(card, i // 4, i % 4)
         health_layout.addLayout(self.health_grid)
         right_layout.addWidget(health_frame)
 
         partition_frame = QFrame()
         partition_frame.setFrameShape(QFrame.Shape.StyledPanel)
         partition_layout = QVBoxLayout(partition_frame)
-        self.partition_title = QLabel("分区与空间使用")
+        self.partition_title = QLabel("分区容量与空间使用")
         self.partition_title.setStyleSheet("font-weight:600;font-size:16px;")
         partition_layout.addWidget(self.partition_title)
         self.partition_map = PartitionMap()
         partition_layout.addWidget(self.partition_map)
-        self.partition_legend = QLabel("选择左侧硬盘后显示分区")
+        self.partition_legend = QLabel("选择左侧硬盘后显示分区容量和已用 / 可用空间")
         self.partition_legend.setWordWrap(True)
         partition_layout.addWidget(self.partition_legend)
-        self.partition_table = QTableWidget(0, 5)
-        self.partition_table.setHorizontalHeaderLabels(["分区", "卷标 / 文件系统", "容量", "已用", "可用"])
+        self.partition_table = QTableWidget(0, 6)
+        self.partition_table.setHorizontalHeaderLabels(["分区", "卷标 / 文件系统", "分区容量", "已用", "可用", "使用率"])
         self.partition_table.horizontalHeader().setStretchLastSection(True)
-        self.partition_table.setMaximumHeight(190)
+        self.partition_table.setMaximumHeight(220)
         partition_layout.addWidget(self.partition_table)
         right_layout.addWidget(partition_frame)
 
         detail_frame = QFrame()
         detail_frame.setFrameShape(QFrame.Shape.StyledPanel)
         detail_layout = QVBoxLayout(detail_frame)
-        detail_title = QLabel("设备详细信息与诊断")
-        detail_title.setStyleSheet("font-weight:600;font-size:15px;")
-        detail_layout.addWidget(detail_title)
+        detail_layout.addWidget(QLabel("设备详细信息与诊断"))
         self.details = QTableWidget(0, 2)
         self.details.setHorizontalHeaderLabels(["项目", "读取结果"])
         self.details.horizontalHeader().setStretchLastSection(True)
-        self.details.setMaximumHeight(180)
+        self.details.setMaximumHeight(150)
         detail_layout.addWidget(self.details)
         self.raw = QTextEdit()
         self.raw.setReadOnly(True)
         self.raw.setPlaceholderText("原始 SMART JSON（用于排查设备兼容性）")
-        self.raw.setMaximumHeight(140)
+        self.raw.setMaximumHeight(100)
         detail_layout.addWidget(self.raw)
-        right_layout.addWidget(detail_frame)
 
+        right_layout.addWidget(detail_frame)
         split.addWidget(right)
         split.setStretchFactor(1, 1)
         root.addWidget(split)
@@ -192,11 +209,11 @@ class MainWindow(QMainWindow):
             self.devices = discover_devices()
             for device in self.devices:
                 title = device.model or "未知型号"
-                capacity = human_bytes(device.capacity_bytes)
-                item = QListWidgetItem(f"{title}\n{capacity}  ·  {device.protocol or device.device_type}")
+                cap = human_bytes(device.capacity_bytes)
+                item = QListWidgetItem(f"{title}\n{cap}  ·  {device.protocol or device.device_type}")
                 item.setToolTip(f"{device.name}\n序列号：{device.serial or '不可用'}")
                 self.device_list.addItem(item)
-            self.status.setText(f"识别到 {len(self.devices)} 个设备。左侧显示型号和容量。")
+            self.status.setText(f"识别到 {len(self.devices)} 个设备。左侧显示设备报告容量。")
             if self.devices:
                 self.device_list.setCurrentRow(0)
             else:
@@ -256,52 +273,64 @@ class MainWindow(QMainWindow):
             layout = get_disk_layout(
                 serial=payload.get("serial_number", device.serial),
                 model=payload.get("model_name", device.model),
-                capacity_bytes=payload.get("user_capacity", {}).get("bytes", device.capacity_bytes),
+                capacity_bytes=int(payload.get("user_capacity", {}).get("bytes") or device.capacity_bytes or 0),
             )
             self.current_layout = layout
-            self._show_partitions(layout)
-            self.status.setText(
-                f"读取完成：{device.model or device.name}。SMART 与分区信息均为只读查询。"
-            )
+            self._show_partitions(layout, payload)
+            self.status.setText(f"读取完成：{device.model or device.name}。SMART 与分区信息均为只读查询。")
         except Exception as exc:
             QMessageBox.warning(self, "读取失败", str(exc))
             self.status.setText(f"读取失败：{exc}")
         finally:
             self.smart_button.setEnabled(True)
 
-    def _show_partitions(self, layout):
+    def _show_partitions(self, layout, payload):
         if layout.get("error"):
-            self.partition_title.setText("分区与空间使用（无法可靠对应）")
+            self.partition_title.setText("分区容量与空间使用（无法可靠对应）")
             self.partition_legend.setText(layout["error"])
             self.partition_map.set_data([], 0)
             self.partition_table.setRowCount(0)
             return
 
         parts = layout.get("partitions", [])
-        total = int(layout.get("disk_size") or 0)
+        windows_total = int(layout.get("disk_size") or 0)
+        smart_total = int(payload.get("user_capacity", {}).get("bytes") or 0)
+        # Windows Get-Disk is authoritative for partition geometry; SMART capacity is shown separately.
+        total = windows_total or smart_total
         self.partition_title.setText(
-            f"分区与空间使用 · Windows 磁盘 {layout.get('disk_number')} · {layout.get('partition_style') or '未知分区表'}"
+            f"物理磁盘容量：{human_bytes(total)}（Windows 磁盘 {layout.get('disk_number')}；匹配方式：{layout.get('match_method')}）"
         )
         self.partition_map.set_data(parts, total)
+
         rows = []
-        used_sum = 0
+        allocated = 0
+        known_used = 0
+        known_free = 0
         for part in parts:
             size = int(part.get("Size") or 0)
+            allocated += size
             used = part.get("SizeUsed")
             free = part.get("SizeRemaining")
-            if isinstance(used, (int, float)):
-                used_sum += int(used)
-            letter = f"{part.get('DriveLetter')}:\\" if part.get("DriveLetter") else "无盘符"
+            if isinstance(used, (int, float)) and isinstance(free, (int, float)):
+                known_used += int(used)
+                known_free += int(free)
+                usage = f"{percent(used, used + free):.1f}%"
+            else:
+                usage = "未挂载 / 未知"
+            drive = str(part.get("DriveLetter") or "").strip()
+            letter = f"{drive}:" if len(drive) == 1 else (drive or "无盘符")
             label = part.get("FileSystemLabel") or part.get("Type") or "分区"
             fs = part.get("FileSystem") or "未知文件系统"
-            rows.append((letter, f"{label} / {fs}", human_bytes(size), human_bytes(used), human_bytes(free)))
+            rows.append((letter, f"{label} / {fs}", human_bytes(size), human_bytes(used), human_bytes(free), usage))
+
         self.partition_table.setRowCount(len(rows))
         for r, values in enumerate(rows):
             for c, value in enumerate(values):
                 self.partition_table.setItem(r, c, QTableWidgetItem(str(value)))
-        free_disk = max(total - sum(int(p.get("Size") or 0) for p in parts), 0)
+
+        unallocated = max(total - allocated, 0)
+        smart_text = f"SMART 命名空间容量：{human_bytes(smart_total)}" if smart_total else ""
         self.partition_legend.setText(
-            f"磁盘总容量：{human_bytes(total)}　分区：{len(parts)} 个　"
-            f"已分配：{human_bytes(sum(int(p.get('Size') or 0) for p in parts))}　"
-            f"未分配：{human_bytes(free_disk)}"
+            f"分区 {len(parts)} 个　已分配 {human_bytes(allocated)}　未分配 {human_bytes(unallocated)}\n"
+            f"已用 {human_bytes(known_used)}　可用 {human_bytes(known_free)}　{smart_text}"
         )
