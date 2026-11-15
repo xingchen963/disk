@@ -34,65 +34,111 @@ def percent(part, total):
 
 
 class PartitionMap(QWidget):
-    """One disk-wide map: each partition is sized by capacity and split into used/free."""
+    """Large disk map with partition letters/roles and used/free proportions."""
     COLORS = ["#3678d4", "#229b73", "#d49b32", "#8a70d6", "#cf6b91", "#319da0"]
+    EFI_GUID = "C12A7328F81F11D2BA4B00A0C93EC93B"
+    MSR_GUID = "E3C9E3160B5C4DB8817DF92DF00215AE"
+    BASIC_GUID = "EBD0A0A2B9E5443387C068B6B72699C7"
+    RECOVERY_GUID = "DE94BBA406D14D40A16ABFD50179D6AC"
 
     def __init__(self):
         super().__init__()
         self.parts = []
         self.total = 0
-        self.setMinimumHeight(76)
+        self.setMinimumHeight(142)
+        self.setSizePolicy(self.sizePolicy().horizontalPolicy(), self.sizePolicy().verticalPolicy())
 
     def set_data(self, parts, total):
         self.parts = parts or []
         self.total = max(int(total or 0), 0)
         self.update()
 
+    @classmethod
+    def partition_role(cls, part):
+        drive = str(part.get("DriveLetter") or "").strip().upper()
+        gpt = "".join(ch for ch in str(part.get("GptType") or "").upper() if ch.isalnum())
+        mbr = str(part.get("MbrType") or "").strip().lower()
+        if gpt == cls.EFI_GUID or part.get("IsSystem") and not drive:
+            return "EFI 引导分区"
+        if gpt == cls.MSR_GUID:
+            return "MSR 保留分区"
+        if gpt == cls.RECOVERY_GUID or mbr in {"0x27", "39"}:
+            return "恢复分区"
+        if part.get("IsBoot") and drive:
+            return "Windows 系统分区"
+        if part.get("IsHidden") or part.get("NoDefaultDriveLetter"):
+            return "隐藏分区"
+        if drive:
+            return "数据分区"
+        if part.get("IsSystem"):
+            return "系统分区"
+        return "无盘符分区"
+
+    @classmethod
+    def partition_name(cls, part):
+        drive = str(part.get("DriveLetter") or "").strip().upper()
+        role = cls.partition_role(part)
+        if drive:
+            return f"{drive}: {role}"
+        return f"无盘符 · {role}"
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        outer = self.rect().adjusted(2, 5, -2, -5)
+        outer = self.rect().adjusted(2, 4, -2, -4)
         if self.total <= 0:
             painter.drawText(outer, Qt.AlignmentFlag.AlignCenter, "暂无可用的分区容量信息")
             return
 
-        bar = outer.adjusted(0, 18, 0, -20)
+        painter.setPen(QColor(self.palette().color(self.foregroundRole())))
+        painter.drawText(outer.left(), outer.top() + 17, f"磁盘总容量：{human_bytes(self.total)}")
+
+        bar = outer.adjusted(0, 28, 0, -43)
         x = bar.left()
         width_total = bar.width()
         allocated = 0
-        for p in self.parts:
-            size = max(int(p.get("Size") or 0), 0)
+        for index, part in enumerate(self.parts):
+            size = max(int(part.get("Size") or 0), 0)
             if not size:
                 continue
             allocated += size
             seg_w = max(1, round(width_total * size / self.total))
-            seg_w = min(seg_w, bar.right() - x + 1)
-            used = p.get("SizeUsed")
-            free = p.get("SizeRemaining")
+            seg_w = min(seg_w, max(0, bar.right() - x + 1))
+            if seg_w <= 0:
+                break
+
+            used = part.get("SizeUsed")
+            free = part.get("SizeRemaining")
             if isinstance(used, (int, float)) and isinstance(free, (int, float)) and used + free > 0:
-                used_w = round(seg_w * max(0, used) / (used + free))
-                used_w = min(max(used_w, 0), seg_w)
-                painter.fillRect(x, bar.top(), used_w, bar.height(), QColor(self.COLORS[len([q for q in self.parts[:self.parts.index(p)]]) % len(self.COLORS)]))
+                used_w = min(max(round(seg_w * max(0, used) / (used + free)), 0), seg_w)
+                painter.fillRect(x, bar.top(), used_w, bar.height(), QColor(self.COLORS[index % len(self.COLORS)]))
                 painter.fillRect(x + used_w, bar.top(), seg_w - used_w, bar.height(), QColor("#cbd5e1"))
             else:
                 painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#7b8794"))
+
+            if seg_w >= 54:
+                painter.setPen(QColor("#ffffff" if isinstance(used, (int, float)) else "#172b4d"))
+                drive = str(part.get("DriveLetter") or "").strip().upper()
+                label = f"{drive}:" if drive else f"分区{part.get('PartitionNumber', index + 1)}"
+                painter.drawText(x + 2, bar.top(), max(seg_w - 4, 1), bar.height(),
+                                 Qt.AlignmentFlag.AlignCenter, label)
             x += seg_w
             if x > bar.right():
                 break
 
         unallocated = max(self.total - allocated, 0)
-        if unallocated:
-            remain_w = max(0, bar.right() - x + 1)
-            if remain_w:
-                painter.fillRect(x, bar.top(), remain_w, bar.height(), QColor("#454d5a"))
+        if unallocated and x <= bar.right():
+            painter.fillRect(x, bar.top(), bar.right() - x + 1, bar.height(), QColor("#454d5a"))
 
         painter.setPen(QPen(QColor("#9aa4b2"), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(bar, 5, 5)
 
         painter.setPen(QColor(self.palette().color(self.foregroundRole())))
-        painter.drawText(outer.left(), outer.top() + 13, f"磁盘总容量 {human_bytes(self.total)}")
-        painter.drawText(outer.left(), outer.bottom() - 2, "彩色 = 已用    浅灰 = 可用    深灰 = 未分配 / 未知")
+        painter.drawText(outer.left(), bar.bottom() + 19,
+                         "彩色 = 已用    浅灰 = 可用    深灰 = 未分配    灰色 = 未知")
+        painter.drawText(outer.left(), outer.bottom() - 2,
+                         "分区标签见下方列表；无盘符分区会标注 EFI、恢复、MSR 保留或隐藏属性")
 
 
 class MainWindow(QMainWindow):
@@ -171,9 +217,11 @@ class MainWindow(QMainWindow):
         self.partition_legend.setWordWrap(True)
         partition_layout.addWidget(self.partition_legend)
         self.partition_table = QTableWidget(0, 6)
-        self.partition_table.setHorizontalHeaderLabels(["分区", "卷标 / 文件系统", "分区容量", "已用", "可用", "使用率"])
+        self.partition_table.setHorizontalHeaderLabels(["盘符 / 分区类型", "卷标 / 文件系统", "分区容量", "已用", "可用", "使用率"])
         self.partition_table.horizontalHeader().setStretchLastSection(True)
-        self.partition_table.setMaximumHeight(220)
+        self.partition_table.setColumnWidth(0, 190)
+        self.partition_table.setColumnWidth(1, 170)
+        self.partition_table.setMaximumHeight(270)
         partition_layout.addWidget(self.partition_table)
         right_layout.addWidget(partition_frame)
 
@@ -323,8 +371,8 @@ class MainWindow(QMainWindow):
             else:
                 usage = "未挂载 / 未知"
             drive = str(part.get("DriveLetter") or "").strip()
-            letter = f"{drive}:" if len(drive) == 1 else (drive or "无盘符")
-            label = part.get("FileSystemLabel") or part.get("Type") or "分区"
+            letter = PartitionMap.partition_name(part)
+            label = part.get("FileSystemLabel") or part.get("Type") or "未格式化 / 未知"
             fs = part.get("FileSystem") or "未知文件系统"
             rows.append((letter, f"{label} / {fs}", human_bytes(size), human_bytes(used), human_bytes(free), usage))
 
