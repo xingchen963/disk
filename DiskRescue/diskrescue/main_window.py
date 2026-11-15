@@ -95,9 +95,9 @@ class PartitionMap(QWidget):
         painter.setPen(QColor(self.palette().color(self.foregroundRole())))
         painter.drawText(outer.left(), outer.top() + 17, f"磁盘总容量：{human_bytes(self.total)}")
 
-        # Full width; reduce the previous 90% bar height by exactly 15% (90% * 0.85 = 76.5%).
+        # Full width; reduce the current R5 bar height by another 10% (76.5% * 0.90 = 68.85%).
         base_bar = outer.adjusted(0, 28, 0, -43)
-        bar_height = max(int(base_bar.height() * 0.765), 42)
+        bar_height = max(int(base_bar.height() * 0.6885), 42)
         bar_height = min(bar_height, base_bar.height())
         bar_y = base_bar.top() + (base_bar.height() - bar_height) // 2
         bar = QRect(base_bar.left(), bar_y, base_bar.width(), bar_height)
@@ -205,7 +205,7 @@ class PartitionMap(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 分区图 R5")
+        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 分区图 R6")
         self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
@@ -309,7 +309,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         root.addWidget(split)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DiskRescue 开发版 · 分区图 R5 · 全宽 / 高度 76.5%")
+        self.statusBar().showMessage("DiskRescue 开发版 · 分区图 R6 · 全宽 / 高度 68.85%")
 
     def selection_changed(self, row):
         valid = 0 <= row < len(self.devices)
