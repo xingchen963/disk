@@ -1,48 +1,55 @@
-# DiskRescue Windows build script
-# Run from the DiskRescue project directory in PowerShell.
-$ErrorActionPreference = "Stop"
+# DiskRescue Windows build script (ASCII-only for Windows PowerShell 5.1)
+$ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $projectRoot
+Set-Location -LiteralPath $projectRoot
 
-# Do not let PyInstaller delete/replace Qt DLLs that are still loaded by the app.
-$running = Get-Process -Name "DiskRescue" -ErrorAction SilentlyContinue
+$running = Get-Process -Name 'DiskRescue' -ErrorAction SilentlyContinue
 if ($running) {
-    $ids = ($running | Select-Object -ExpandProperty Id) -join ", "
-    throw "检测到 DiskRescue.exe 仍在运行（PID: $ids）。请先关闭所有 DiskRescue 窗口，再重新执行本脚本。"
+    $processIds = ($running | ForEach-Object { $_.Id }) -join ', '
+    throw "DiskRescue is still running (PID: $processIds). Close every DiskRescue window and run this script again."
 }
 
-$python = Join-Path $projectRoot ".venv\Scripts\python.exe"
-$pyinstaller = Join-Path $projectRoot ".venv\Scripts\pyinstaller.exe"
+$venvDir = [System.IO.Path]::Combine($projectRoot, '.venv')
+$python = [System.IO.Path]::Combine($venvDir, 'Scripts', 'python.exe')
+$pyinstaller = [System.IO.Path]::Combine($venvDir, 'Scripts', 'pyinstaller.exe')
 
-if (-not (Test-Path $python)) {
-    py -3 -m venv .venv
+if (-not (Test-Path -LiteralPath $python)) {
+    & py -3 -m venv $venvDir
     if ($LASTEXITCODE -ne 0) {
-        throw "创建 Python 虚拟环境失败，退出码：$LASTEXITCODE"
+        throw "Creating the virtual environment failed. Exit code: $LASTEXITCODE"
     }
+}
+
+if (-not (Test-Path -LiteralPath $python)) {
+    throw "Python executable was not created: $python"
 }
 
 & $python -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) {
-    throw "升级 pip 失败，退出码：$LASTEXITCODE"
+    throw "Upgrading pip failed. Exit code: $LASTEXITCODE"
 }
 
 & $python -m pip install -r requirements.txt pyinstaller
 if ($LASTEXITCODE -ne 0) {
-    throw "安装项目依赖失败，退出码：$LASTEXITCODE"
+    throw "Installing requirements failed. Exit code: $LASTEXITCODE"
+}
+
+if (-not (Test-Path -LiteralPath $pyinstaller)) {
+    throw "PyInstaller executable was not found: $pyinstaller"
 }
 
 & $pyinstaller --noconfirm --clean --windowed --name DiskRescue main.py
 if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller 编译失败，退出码：$LASTEXITCODE。请查看上方错误日志。"
+    throw "PyInstaller build failed. Exit code: $LASTEXITCODE"
 }
 
-$exe = Join-Path $projectRoot "dist\DiskRescue\DiskRescue.exe"
-if (-not (Test-Path $exe)) {
-    throw "PyInstaller 返回成功，但没有找到预期文件：$exe"
+$exe = [System.IO.Path]::Combine($projectRoot, 'dist', 'DiskRescue', 'DiskRescue.exe')
+if (-not (Test-Path -LiteralPath $exe)) {
+    throw "Build returned success but the executable is missing: $exe"
 }
 
-Write-Host ""
-Write-Host "Build succeeded." -ForegroundColor Green
+Write-Host ''
+Write-Host 'BUILD SUCCEEDED' -ForegroundColor Green
 Write-Host "Executable: $exe"
-Write-Host "请保留同目录下的 _internal 文件夹，不要只复制 EXE。"
+Write-Host 'Keep the _internal directory next to DiskRescue.exe.'
