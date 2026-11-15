@@ -102,14 +102,14 @@ def _number(value: Any) -> str:
 
 
 def _human_bytes(value: Any) -> str:
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, (int, float)) or value < 0:
         return "不可用"
     amount = float(value)
-    for unit in ("B", "KB", "GB", "TB", "PB"):
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
         if amount < 1000 or unit == "PB":
-            return f"{amount:,.1f} {unit}" if unit != "B" else f"{amount:,.0f} B"
+            return f"{amount:,.2f} {unit}" if unit != "B" else f"{amount:,.0f} B"
         amount /= 1000
-    return f"{amount:,.1f} PB"
+    return f"{amount:,.2f} PB"
 
 
 def summarize(payload: dict[str, Any]) -> list[tuple[str, str]]:
