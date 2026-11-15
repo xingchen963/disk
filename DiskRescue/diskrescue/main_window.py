@@ -14,12 +14,17 @@ from .disk_layout import get_disk_layout
 def human_bytes(value):
     if not isinstance(value, (int, float)) or value < 0:
         return "未知"
-    amount = float(value)
-    for unit in ("B", "KB", "GB", "TB", "PB"):
-        if amount < 1000 or unit == "PB":
-            return f"{amount:,.2f} {unit}" if unit != "B" else f"{amount:,.0f} B"
-        amount /= 1000
-    return f"{amount:,.2f} PB"
+    raw = int(value)
+    decimal = float(raw)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if decimal < 1000 or unit == "PB":
+            decimal_text = f"{decimal:,.2f} {unit}" if unit != "B" else f"{decimal:,.0f} B"
+            break
+        decimal /= 1000
+    if raw >= 1_000_000_000:
+        binary = raw / (1024 ** 3)
+        return f"{decimal_text}（{binary:,.1f} GiB）"
+    return decimal_text
 
 
 def percent(part, total):
