@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
+    QMessageBox, QPushButton, QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
@@ -45,7 +45,7 @@ class PartitionMap(QWidget):
         super().__init__()
         self.parts = []
         self.total = 0
-        self.setMinimumHeight(142)
+        self.setMinimumHeight(190)
         self.setSizePolicy(self.sizePolicy().horizontalPolicy(), self.sizePolicy().verticalPolicy())
 
     def set_data(self, parts, total):
@@ -58,20 +58,22 @@ class PartitionMap(QWidget):
         drive = str(part.get("DriveLetter") or "").strip().upper()
         gpt = "".join(ch for ch in str(part.get("GptType") or "").upper() if ch.isalnum())
         mbr = str(part.get("MbrType") or "").strip().lower()
-        if gpt == cls.EFI_GUID or part.get("IsSystem") and not drive:
+        # Get-Partition.Type is present in the user's verified Windows output:
+        # "System", "Reserved" and "Basic". Use it as a reliable fallback when
+        # the Storage provider omits optional GPT/boolean properties.
+        part_type = str(part.get("Type") or "").strip().casefold()
+        if gpt == cls.EFI_GUID or part_type == "system" or (part.get("IsSystem") and not drive):
             return "EFI 引导分区"
-        if gpt == cls.MSR_GUID:
+        if gpt == cls.MSR_GUID or part_type == "reserved":
             return "MSR 保留分区"
-        if gpt == cls.RECOVERY_GUID or mbr in {"0x27", "39"}:
-            return "恢复分区"
-        if part.get("IsBoot") and drive:
+        if gpt == cls.RECOVERY_GUID or mbr in {"0x27", "27", "39"} or part_type == "recovery":
+            return "Windows 恢复分区"
+        if drive and (part.get("IsBoot") or part.get("IsSystem")):
             return "Windows 系统分区"
         if part.get("IsHidden") or part.get("NoDefaultDriveLetter"):
             return "隐藏分区"
         if drive:
             return "数据分区"
-        if part.get("IsSystem"):
-            return "系统分区"
         return "无盘符分区"
 
     @classmethod
@@ -79,7 +81,7 @@ class PartitionMap(QWidget):
         drive = str(part.get("DriveLetter") or "").strip().upper()
         role = cls.partition_role(part)
         if drive:
-            return f"{drive}: {role}"
+            return f"{drive}盘 · {role}"
         return f"无盘符 · {role}"
 
     def paintEvent(self, event):
@@ -219,9 +221,12 @@ class MainWindow(QMainWindow):
         self.partition_table = QTableWidget(0, 6)
         self.partition_table.setHorizontalHeaderLabels(["盘符 / 分区类型", "卷标 / 文件系统", "分区容量", "已用", "可用", "使用率"])
         self.partition_table.horizontalHeader().setStretchLastSection(True)
-        self.partition_table.setColumnWidth(0, 190)
+        self.partition_table.setColumnWidth(0, 230)
         self.partition_table.setColumnWidth(1, 170)
-        self.partition_table.setMaximumHeight(270)
+        self.partition_table.setColumnWidth(2, 125)
+        self.partition_table.setColumnWidth(3, 125)
+        self.partition_table.setColumnWidth(4, 125)
+        self.partition_table.setMaximumHeight(300)
         partition_layout.addWidget(self.partition_table)
         right_layout.addWidget(partition_frame)
 
@@ -378,8 +383,28 @@ class MainWindow(QMainWindow):
 
         self.partition_table.setRowCount(len(rows))
         for r, values in enumerate(rows):
-            for c, value in enumerate(values):
-                self.partition_table.setItem(r, c, QTableWidgetItem(str(value)))
+            for col, value in enumerate(values):
+                if col == 5:
+                    part = parts[r]
+                    used = part.get("SizeUsed")
+                    free = part.get("SizeRemaining")
+                    if isinstance(used, (int, float)) and isinstance(free, (int, float)) and used + free > 0:
+                        bar = QProgressBar()
+                        bar.setRange(0, 1000)
+                        ratio = percent(used, used + free)
+                        bar.setValue(round(ratio * 10))
+                        bar.setFormat(f"{ratio:.1f}% 已用")
+                        bar.setTextVisible(True)
+                        bar.setStyleSheet(
+                            "QProgressBar{border:1px solid #8993a2;border-radius:5px;text-align:center;}"
+                            "QProgressBar::chunk{background:#397fd6;border-radius:4px;}"
+                        )
+                        self.partition_table.setCellWidget(r, col, bar)
+                    else:
+                        self.partition_table.setItem(r, col, QTableWidgetItem("未知 / 未挂载"))
+                else:
+                    self.partition_table.setItem(r, col, QTableWidgetItem(str(value)))
+            self.partition_table.setRowHeight(r, 36)
 
         unallocated = max(total - allocated, 0)
         smart_text = f"SMART 命名空间容量：{human_bytes(smart_total)}" if smart_total else ""
