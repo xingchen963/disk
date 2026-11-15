@@ -1,3 +1,4 @@
+import json
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -21,7 +22,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DiskRescue — 硬盘检测与数据救援")
-        self.resize(980, 650)
+        self.resize(1050, 720)
         self.devices: list[Device] = []
 
         central = QWidget()
@@ -60,11 +61,12 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["项目", "读取结果"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
         right_layout.addWidget(self.table)
 
         self.raw = QTextEdit()
         self.raw.setReadOnly(True)
-        self.raw.setPlaceholderText("SMART 原始 JSON 信息")
+        self.raw.setPlaceholderText("SMART 原始 JSON 和 smartctl 诊断信息")
         right_layout.addWidget(self.raw)
 
         splitter.addWidget(right)
@@ -97,7 +99,7 @@ class MainWindow(QMainWindow):
                 self.status.setText(
                     "未发现支持 SMART 查询的设备。USB 转接盒可能不透传 SMART。"
                 )
-        except (SmartctlError, Exception) as exc:
+        except Exception as exc:
             QMessageBox.warning(self, "设备扫描", str(exc))
             self.status.setText("扫描未完成。")
         finally:
@@ -110,6 +112,8 @@ class MainWindow(QMainWindow):
 
         self.smart_button.setEnabled(False)
         self.status.setText("正在读取 SMART 信息……")
+        self.table.setRowCount(0)
+        self.raw.clear()
         try:
             payload = read_smart(self.devices[row])
             rows = summarize(payload)
@@ -118,14 +122,16 @@ class MainWindow(QMainWindow):
                 self.table.setItem(index, 0, QTableWidgetItem(key))
                 self.table.setItem(index, 1, QTableWidgetItem(value))
 
-            self.raw.setPlainText(
-                __import__("json").dumps(payload, ensure_ascii=False, indent=2)
-            )
+            diagnostics = payload.get("_diskrescue_diagnostics", {})
+            self.raw.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
+            rc = diagnostics.get("return_code", "未知")
             self.status.setText(
-                "读取完成。SMART 通过不等于硬盘绝对健康。"
+                f"SMART 查询完成；smartctl 退出码：{rc}。"
+                "如有字段不可用，请查看原始 JSON。"
             )
         except Exception as exc:
-            QMessageBox.warning(self, "SMART 读取", str(exc))
-            self.status.setText("读取失败或设备不支持。")
+            self.raw.setPlainText(str(exc))
+            QMessageBox.warning(self, "SMART 读取失败", str(exc))
+            self.status.setText("读取失败；详细原因已显示在原始信息区域。")
         finally:
             self.smart_button.setEnabled(True)
