@@ -211,13 +211,9 @@ def discover_devices() -> list[Device]:
         )
         devices.append(device)
 
-    # Retain SMART-visible devices that Windows could not safely map to a physical disk.
-    # They are shown separately and their partition mapping is deliberately not guessed.
-    for index, smart in enumerate(smart_devices):
-        if index not in used_smart_indices:
-            smart.smart_error = smart.smart_error or "SMART 设备尚未与 Windows 物理磁盘唯一匹配，分区图未关联。"
-            devices.append(smart)
-
+    # Windows is the authoritative physical-disk inventory on this platform.
+    # smartctl may expose the same storage device under an alias such as /dev/sdc.
+    # If the alias cannot be mapped safely, do not add it as a second physical disk.
     return devices
 
 

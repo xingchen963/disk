@@ -39,7 +39,7 @@ if (-not (Test-Path -LiteralPath $pyinstaller)) {
     throw "PyInstaller executable was not found: $pyinstaller"
 }
 
-& $pyinstaller --noconfirm --clean --windowed --name DiskRescue main.py
+& $pyinstaller --noconfirm --clean --windowed --uac-admin --name DiskRescue main.py
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller build failed. Exit code: $LASTEXITCODE"
 }

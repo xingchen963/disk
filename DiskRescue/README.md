@@ -10,14 +10,16 @@ The application now:
 - Loads the selected disk when its row is clicked.
 - Reads SMART data through smartmontools when the device/USB bridge supports passthrough. A SMART failure does not hide the physical disk or prevent partition inspection.
 - Reads Windows partition and volume metadata, including partitions without drive letters.
-- Reads a small number of metadata sectors from the physical disk in read-only mode when Windows permissions allow it.
+- Reads a small number of metadata sectors from the physical disk in read-only mode. The packaged EXE requests Administrator elevation for this operation.
 - Parses GPT, MBR (including extended/logical partition chains), and Apple Partition Map (APM) partition layouts.
 - Identifies BSD disklabel and Solaris VTOC signatures, but does not yet parse their partition geometry.
-- Detects common file-system/container signatures: NTFS, FAT12/16/32, exFAT, ReFS signature candidate, BitLocker, ext2/3/4, XFS, Btrfs, APFS, HFS+, LUKS, Linux Swap, LVM PV, UDF, and ISO 9660.
+- Detects common file-system/container signatures: NTFS, FAT12/16/32, exFAT, ReFS signature candidate, BitLocker, ext2/3/4, XFS, Btrfs, APFS, HFS+, Apple CoreStorage, LUKS, Linux Swap, LVM PV, UDF, and ISO 9660.
+- When Windows already lists physical disks, unmatched smartctl aliases (for example `/dev/sdc`) are not displayed as additional physical disks.
+- APFS and HFS+ detection uses read-only signatures; DiskRescue does not mount, decrypt, repair, or recover macOS volumes.
 
 ## Detection limits
 
-- Raw physical-sector reads may require running DiskRescue as Administrator. Without access, Windows-reported GPT/MBR layout and mounted-volume file-system information are still shown, but an unmounted hidden partition may only be identified by its partition-type GUID or MBR type.
+- The packaged EXE requests Administrator permission because raw physical-sector metadata reads require elevation on many Windows systems. Without elevation, Windows-reported GPT/MBR layout and mounted-volume file-system information are still shown, but an unmounted hidden partition may only be identified by its partition-type GUID or MBR type.
 - A file-system signature match is identification only. It does not mean that DiskRescue can mount, browse, repair, or recover that file system.
 - Linux LVM, RAID members, LUKS, BitLocker, and swap areas are identified as container/partition types where possible; their contents are not mounted or decrypted.
 - Windows Storage natively reports GPT, MBR, or RAW. APM is parsed from raw sectors. BSD disklabel and Solaris VTOC are signature-only at this milestone.

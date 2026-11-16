@@ -256,7 +256,7 @@ class PartitionMap(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 分区识别 R8")
+        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 磁盘去重 R9")
         self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
@@ -267,7 +267,7 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         root = QVBoxLayout(central)
-        banner = QLabel("安全模式：当前版本仅读取磁盘身份、SMART 和分区信息，不会修改磁盘数据。")
+        banner = QLabel("安全模式：只读磁盘身份、分区表及文件系统签名，不会修改磁盘数据；读取隐藏分区扇区时需要管理员权限。")
         banner.setWordWrap(True)
         banner.setStyleSheet("padding:9px 12px;background:#e8f2ff;color:#17365d;border-radius:6px;")
         root.addWidget(banner)
@@ -359,7 +359,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 1)
         root.addWidget(split)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DiskRescue 开发版 · 自动扫描 / GPT / MBR / APM / 文件系统识别 R8")
+        self.statusBar().showMessage("DiskRescue 开发版 · 物理磁盘去重 / macOS APFS、HFS+ 检测 R9")
         QTimer.singleShot(0, self.scan)
 
     def scan(self):

@@ -111,6 +111,16 @@ class FileSystemSignatureTests(unittest.TestCase):
         data[:6] = b"LUKS\xBA\xBE"
         self.assertEqual(_detect_filesystem(bytes(data))[0], "LUKS 加密容器")
 
+    def test_apfs_container_signature(self):
+        data = bytearray(4096)
+        data[32:36] = b"NXSB"
+        self.assertEqual(_detect_filesystem(bytes(data))[0], "Apple APFS")
+
+    def test_hfs_plus_volume_signature(self):
+        data = bytearray(4096)
+        data[1024:1026] = b"H+"
+        self.assertEqual(_detect_filesystem(bytes(data))[0], "Apple HFS+")
+
 
 if __name__ == "__main__":
     unittest.main()

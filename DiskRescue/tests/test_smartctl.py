@@ -60,6 +60,29 @@ class SmartctlImportAndSummaryTests(unittest.TestCase):
         self.assertEqual(values["介质与数据完整性错误"], "0 次")
         self.assertIn("数据读取量", values)
 
+    def test_unmatched_smart_alias_is_not_a_second_physical_disk(self):
+        windows_rows = [
+            {"Number": 0, "FriendlyName": "SSD A", "SerialNumber": "A1", "Size": 1000, "BusType": "NVMe"},
+            {"Number": 1, "FriendlyName": "SSD B", "SerialNumber": "B1", "Size": 2000, "BusType": "NVMe"},
+            {"Number": 2, "FriendlyName": "Kingston DataTraveler 3.0", "SerialNumber": "", "Size": 3000, "BusType": "USB"},
+        ]
+        scan_payload = {"devices": [{"name": "/dev/sdc", "type": "scsi", "protocol": "SCSI"}]}
+        completed = subprocess.CompletedProcess(
+            args=["smartctl"], returncode=0, stdout="", stderr=""
+        )
+        with patch("diskrescue.smartctl.list_windows_disks", return_value=windows_rows), \\
+             patch("diskrescue.smartctl.smartctl_path", return_value="smartctl.exe"), \\
+             patch("diskrescue.smartctl._run_json", return_value=(scan_payload, completed)), \\
+             patch("diskrescue.smartctl.read_smart", return_value={
+                 "model_name": "", "serial_number": "", "user_capacity": {"bytes": 0}
+             }):
+            from diskrescue.smartctl import discover_devices
+            devices = discover_devices()
+
+        self.assertEqual(len(devices), 3)
+        self.assertEqual([item.windows_disk_number for item in devices], [0, 1, 2])
+        self.assertTrue(all(item.name != "/dev/sdc" for item in devices))
+
 
 if __name__ == "__main__":
     unittest.main()
