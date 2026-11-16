@@ -219,3 +219,130 @@ def discover_devices() -> list[Device]:
             devices.append(smart)
 
     return devices
+
+
+
+def read_smart(device: Device) -> dict[str, Any]:
+    """Read SMART data from one device. Non-zero smartctl status may still include valid JSON."""
+    exe = smartctl_path()
+    if not exe:
+        raise SmartctlError("找不到 smartctl.exe。")
+
+    command = [exe, "-a", "-j"]
+    if device.device_type:
+        command += ["-d", device.device_type]
+    command.append(device.name)
+
+    payload, proc = _run_json(command, timeout=60)
+    if not isinstance(payload, dict) or not payload:
+        detail = proc.stderr.strip() or proc.stdout.strip() or "设备没有返回 SMART JSON。"
+        raise SmartctlError(
+            f"SMART 数据读取失败（退出码 {proc.returncode}）：{detail}"
+        )
+
+    payload["_diskrescue_diagnostics"] = {
+        "command": command,
+        "return_code": proc.returncode,
+        "stderr": proc.stderr.strip(),
+    }
+    return payload
+
+
+def _number(value: Any) -> str:
+    if value is None:
+        return "不可用"
+    if isinstance(value, (int, float)):
+        return f"{value:,}" if isinstance(value, int) else f"{value}"
+    return str(value)
+
+
+def _human_bytes(value: Any) -> str:
+    if not isinstance(value, (int, float)) or value < 0:
+        return "不可用"
+    amount = float(value)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if amount < 1000 or unit == "PB":
+            return f"{amount:,.2f} {unit}" if unit != "B" else f"{amount:,.0f} B"
+        amount /= 1000
+    return f"{amount:,.2f} PB"
+
+
+def summarize(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """Convert smartctl JSON into human-readable device and health rows."""
+    payload = payload or {}
+    capacity = (
+        payload.get("user_capacity", {}).get("bytes")
+        or payload.get("nvme_total_capacity")
+    )
+    passed = payload.get("smart_status", {}).get("passed")
+    health = (
+        "通过（不代表没有故障）" if passed is True
+        else "未通过/异常" if passed is False
+        else "未知或不支持"
+    )
+
+    temperature = payload.get("temperature", {}).get("current")
+    nvme_log = payload.get("nvme_smart_health_information_log", {}) or {}
+    if temperature is None:
+        temperature = nvme_log.get("temperature")
+
+    power_hours = payload.get("power_on_time", {}).get("hours")
+    if power_hours is None:
+        power_hours = nvme_log.get("power_on_hours")
+
+    rows = [
+        ("型号", str(payload.get("model_name") or payload.get("product") or "不可用")),
+        ("序列号", str(payload.get("serial_number") or "不可用")),
+        ("固件版本", str(payload.get("firmware_version") or "不可用")),
+        ("协议", str(payload.get("device", {}).get("protocol") or "不可用")),
+        ("容量", _human_bytes(capacity)),
+        ("SMART 总体状态", health),
+        ("温度", f"{temperature} °C" if temperature is not None else "不可用"),
+        (
+            "通电时间",
+            f"{power_hours:,} 小时"
+            if isinstance(power_hours, (int, float)) else "不可用",
+        ),
+    ]
+
+    if nvme_log:
+        fields = [
+            ("寿命已使用", "percentage_used", "%"),
+            ("可用备用空间", "available_spare", "%"),
+            ("备用空间阈值", "available_spare_threshold", "%"),
+            ("数据读取量", "data_units_read", " units"),
+            ("数据写入量", "data_units_written", " units"),
+            ("通电次数", "power_cycles", " 次"),
+            ("异常断电次数", "unsafe_shutdowns", " 次"),
+            ("介质与数据完整性错误", "media_errors", " 次"),
+            ("错误日志条目数", "num_err_log_entries", " 条"),
+        ]
+        for label, key, suffix in fields:
+            if key not in nvme_log:
+                continue
+            value = nvme_log[key]
+            if key in {"data_units_read", "data_units_written"}:
+                if isinstance(value, (int, float)):
+                    value = f"{_number(value)} units（约 {_human_bytes(value * 512000)}）"
+                else:
+                    value = _number(value)
+                rows.append((label, value))
+            else:
+                rows.append((label, f"{_number(value)}{suffix}"))
+
+    ata_attributes = payload.get("ata_smart_attributes", {}).get("table", []) or []
+    interesting = {
+        5: "重新分配扇区数",
+        187: "报告的不可校正错误",
+        188: "命令超时",
+        197: "待处理扇区数",
+        198: "离线不可校正扇区数",
+        199: "接口 CRC 错误",
+    }
+    for attr in ata_attributes:
+        attribute_id = attr.get("id")
+        if attribute_id in interesting:
+            raw_value = attr.get("raw", {}).get("value", "不可用")
+            rows.append((interesting[attribute_id], str(raw_value)))
+
+    return rows
