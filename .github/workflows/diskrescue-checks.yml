@@ -21,8 +21,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install application dependencies
+        working-directory: DiskRescue
+        run: python -m pip install -r requirements.txt
       - name: Compile all project Python files
         run: python -m compileall -q DiskRescue
+      - name: Verify application imports
+        working-directory: DiskRescue
+        run: python -c "from diskrescue.smartctl import Device, discover_devices, read_smart, summarize; from diskrescue.main_window import MainWindow; print('DiskRescue imports OK')"
       - name: Test partition and file-system signature parsers
         working-directory: DiskRescue
         run: python -m unittest discover -s tests -v
