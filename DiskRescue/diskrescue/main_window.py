@@ -4,11 +4,12 @@ from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QPushButton, QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
-    QTextEdit, QVBoxLayout, QWidget, QGridLayout,
+    QTabWidget, QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
 
 from .smartctl import Device, discover_devices, read_smart, summarize
 from .disk_layout import get_disk_layout
+from .hfsplus import inspect_hfsplus_partition
 
 
 def human_bytes(value):
@@ -45,7 +46,7 @@ class DiscoveryWorker(QThread):
 
 
 class DeviceReadWorker(QThread):
-    data_ready = Signal(object, object, str)
+    data_ready = Signal(object, object, str, object)
     failed = Signal(str)
 
     def __init__(self, device, cached_payload=None, parent=None):
@@ -75,7 +76,23 @@ class DeviceReadWorker(QThread):
                 ),
                 disk_number=self.device.windows_disk_number,
             )
-            self.data_ready.emit(payload, layout, smart_error)
+            hfsplus_reports = []
+            if self.device.windows_disk_number is not None and not layout.get("error"):
+                for partition in layout.get("partitions", []):
+                    detected_fs = str(
+                        partition.get("DetectedFileSystem")
+                        or partition.get("FileSystem")
+                        or ""
+                    )
+                    if detected_fs.startswith("Apple HFS+") or detected_fs.startswith("Apple HFSX"):
+                        hfsplus_reports.append(
+                            inspect_hfsplus_partition(
+                                self.device.windows_disk_number,
+                                int(partition.get("Offset") or 0),
+                                int(partition.get("Size") or 0),
+                            )
+                        )
+            self.data_ready.emit(payload, layout, smart_error, hfsplus_reports)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -256,7 +273,7 @@ class PartitionMap(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | 磁盘去重 R9")
+        self.setWindowTitle("DiskRescue — 硬盘检测与数据救援 | HFS+ 目录读取 R10")
         self.resize(1220, 900)
         self.devices: list[Device] = []
         self.current_payload = None
@@ -348,18 +365,42 @@ class MainWindow(QMainWindow):
         self.details.horizontalHeader().setStretchLastSection(True)
         self.details.setMaximumHeight(150)
         detail_layout.addWidget(self.details)
+        self.detail_tabs = QTabWidget()
+
+        raw_tab = QWidget()
+        raw_tab_layout = QVBoxLayout(raw_tab)
+        raw_tab_layout.setContentsMargins(4, 4, 4, 4)
         self.raw = QTextEdit()
         self.raw.setReadOnly(True)
         self.raw.setPlaceholderText("原始 SMART JSON（用于排查设备兼容性）")
-        self.raw.setMaximumHeight(100)
-        detail_layout.addWidget(self.raw)
+        raw_tab_layout.addWidget(self.raw)
+        self.detail_tabs.addTab(raw_tab, "SMART 原始数据")
+
+        hfs_tab = QWidget()
+        hfs_tab_layout = QVBoxLayout(hfs_tab)
+        hfs_tab_layout.setContentsMargins(4, 4, 4, 4)
+        self.hfs_summary = QLabel("当前选中磁盘未发现 HFS+ 分区。")
+        self.hfs_summary.setWordWrap(True)
+        hfs_tab_layout.addWidget(self.hfs_summary)
+        self.hfs_table = QTableWidget(0, 5)
+        self.hfs_table.setHorizontalHeaderLabels(["类型", "名称", "CNID", "大小 / 子项", "完整路径"])
+        self.hfs_table.horizontalHeader().setStretchLastSection(True)
+        self.hfs_table.setColumnWidth(0, 70)
+        self.hfs_table.setColumnWidth(1, 180)
+        self.hfs_table.setColumnWidth(2, 90)
+        self.hfs_table.setColumnWidth(3, 120)
+        self.hfs_table.setMaximumHeight(165)
+        hfs_tab_layout.addWidget(self.hfs_table)
+        self.detail_tabs.addTab(hfs_tab, "HFS+ 目录预览")
+        self.detail_tabs.setMaximumHeight(215)
+        detail_layout.addWidget(self.detail_tabs)
 
         right_layout.addWidget(detail_frame)
         split.addWidget(right)
         split.setStretchFactor(1, 1)
         root.addWidget(split)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("DiskRescue 开发版 · 物理磁盘去重 / macOS APFS、HFS+ 检测 R9")
+        self.statusBar().showMessage("DiskRescue 开发版 · HFS+ 卷头 / 分配位图 / Catalog B-tree 只读读取 R10")
         QTimer.singleShot(0, self.scan)
 
     def scan(self):
@@ -461,7 +502,7 @@ class MainWindow(QMainWindow):
         self._read_thread.finished.connect(self._read_thread.deleteLater)
         self._read_thread.start()
 
-    def _on_device_data_ready(self, payload, layout, smart_error):
+    def _on_device_data_ready(self, payload, layout, smart_error, hfsplus_reports):
         device = self._reading_device
         payload = payload or {}
         self.current_payload = payload or None
@@ -510,6 +551,7 @@ class MainWindow(QMainWindow):
 
         self.current_layout = layout
         self._show_partitions(layout, payload)
+        self._show_hfsplus_reports(hfsplus_reports)
         device_name = device.model or device.name
         if payload:
             status = f"读取完成：{device_name}。SMART 与分区检测均为只读。"
@@ -517,6 +559,55 @@ class MainWindow(QMainWindow):
             status = f"已读取 {device_name} 的分区信息；SMART 不可用：{smart_error or '设备不支持'}"
         self.status.setText(status)
         self.statusBar().showMessage(status)
+
+    def _show_hfsplus_reports(self, reports):
+        reports = reports or []
+        self.hfs_table.setRowCount(0)
+        if not reports:
+            self.hfs_summary.setText("当前选中磁盘未发现可读取的 HFS+ / HFSX 分区。")
+            return
+
+        rows = []
+        summaries = []
+        for report_index, report in enumerate(reports, start=1):
+            if report.get("error"):
+                summaries.append(f"分区 {report_index}：读取失败：{report['error']}")
+                continue
+
+            catalog = report.get("catalog", {})
+            volume_name = catalog.get("volume_name") or "未命名卷"
+            free_bytes = report.get("free_bytes")
+            total_bytes = report.get("total_bytes")
+            summaries.append(
+                f"{volume_name} · {report.get('filesystem')} v{report.get('version')} · "
+                f"文件 {report.get('file_count', 0):,} 个 / 文件夹 {report.get('folder_count', 0):,} 个 · "
+                f"已列出 {catalog.get('entries_returned', 0):,} 项 · "
+                f"空闲 {human_bytes(free_bytes)} / {human_bytes(total_bytes)}"
+            )
+            for warning in report.get("warnings", []):
+                summaries.append(f"提示：{warning}")
+
+            for entry in catalog.get("entries", []):
+                if len(rows) >= 500:
+                    break
+                if entry.get("kind") == "文件":
+                    size_text = human_bytes(entry.get("size"))
+                else:
+                    size_text = f"{int(entry.get('child_count') or 0):,} 项"
+                rows.append((
+                    str(entry.get("kind") or ""),
+                    str(entry.get("name") or ""),
+                    str(entry.get("id") or ""),
+                    size_text,
+                    str(entry.get("path") or ""),
+                ))
+
+        self.hfs_summary.setText("\n".join(summaries) if summaries else "HFS+ 分区未能读取。")
+        self.hfs_table.setRowCount(len(rows))
+        for row_index, values in enumerate(rows):
+            for column, value in enumerate(values):
+                self.hfs_table.setItem(row_index, column, QTableWidgetItem(value))
+            self.hfs_table.setRowHeight(row_index, 28)
 
     def _on_device_read_failed(self, message):
         self.status.setText(f"读取失败：{message}")
@@ -536,6 +627,8 @@ class MainWindow(QMainWindow):
         self.partition_map.set_data([], 0)
         self.partition_legend.setText("正在读取所选磁盘的分区信息……")
         self.raw.clear()
+        self.hfs_summary.setText("当前选中磁盘未发现可读取的 HFS+ / HFSX 分区。")
+        self.hfs_table.setRowCount(0)
         for label in self.health_labels.values():
             label.setText("—")
 
