@@ -116,6 +116,7 @@ class HFSPlusInspectionTests(unittest.TestCase):
     def test_reads_volume_header_allocation_bitmap_and_catalog(self):
         volume = build_hfsplus_volume()
         report = inspect_hfsplus(volume.read, len(volume.data))
+        self.assertNotIn("error", report, msg=report.get("error", "unknown HFS+ parser error"))
 
         self.assertEqual(report["filesystem"], "HFS+")
         self.assertEqual(report["version"], 4)
