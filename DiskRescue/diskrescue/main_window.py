@@ -2,7 +2,7 @@ import json
 from PySide6.QtCore import Qt, QRect, QThread, Signal, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
 from PySide6.QtWidgets import (
-    QFrame, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+    QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
     QPushButton, QProgressBar, QSplitter, QTableWidget, QTableWidgetItem,
     QTextEdit, QVBoxLayout, QWidget, QGridLayout,
 )
