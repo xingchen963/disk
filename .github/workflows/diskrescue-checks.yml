@@ -29,6 +29,11 @@ jobs:
       - name: Verify application imports
         working-directory: DiskRescue
         run: python -c "from diskrescue.smartctl import Device, discover_devices, read_smart, summarize; from diskrescue.main_window import MainWindow; print('DiskRescue imports OK')"
+      - name: Smoke-test MainWindow construction
+        working-directory: DiskRescue
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "from PySide6.QtWidgets import QApplication; from diskrescue.main_window import MainWindow; app = QApplication([]); window = MainWindow(); assert window.detail_tabs.count() == 2; print('MainWindow construction OK'); window.close()"
       - name: Test partition and file-system signature parsers
         working-directory: DiskRescue
         run: python -m unittest discover -s tests -v

@@ -403,8 +403,10 @@ def _detect_filesystem(data: bytes, partition_type_name: str = "") -> tuple[str,
         return "Btrfs", "Btrfs 超级块魔数"
     if len(data) >= 36 and data[32:36] == b"NXSB":
         return "Apple APFS", "APFS 容器超级块魔数"
-    if len(data) >= 1026 and data[1024:1026] in {b"H+", b"HX"}:
+    if len(data) >= 1026 and data[1024:1026] == b"H+":
         return "Apple HFS+", "HFS+ 卷头签名"
+    if len(data) >= 1026 and data[1024:1026] == b"HX":
+        return "Apple HFSX", "HFSX 卷头签名"
     if len(data) >= 16 * 2048 + 6 and data[16 * 2048 + 1:16 * 2048 + 6] == b"CD001":
         return "ISO 9660", "光盘卷描述符签名"
     if len(data) >= 32768 + 6 and data[32768 + 1:32768 + 6] in {b"BEA01", b"NSR02", b"NSR03"}:

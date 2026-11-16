@@ -138,6 +138,17 @@ class HFSPlusInspectionTests(unittest.TestCase):
         self.assertEqual(by_name["note.txt"]["path"], "/Docs/note.txt")
         self.assertEqual(by_name["note.txt"]["size"], 1234)
 
+    def test_inspects_hfsx_variant(self):
+        volume = build_hfsplus_volume()
+        header = bytearray(volume.read(1024, 512))
+        header[:2] = b"HX"
+        struct.pack_into(">H", header, 2, 5)
+        volume.write(1024, header)
+        report = inspect_hfsplus(volume.read, len(volume.data))
+        self.assertNotIn("error", report, msg=report.get("error", "unknown HFSX parser error"))
+        self.assertEqual(report["filesystem"], "HFSX")
+        self.assertEqual(report["version"], 5)
+
     def test_rejects_non_hfs_volume(self):
         volume = MemoryVolume(4096)
         report = inspect_hfsplus(volume.read, len(volume.data))

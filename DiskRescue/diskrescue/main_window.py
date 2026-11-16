@@ -391,7 +391,7 @@ class MainWindow(QMainWindow):
         self.hfs_table.setColumnWidth(3, 120)
         self.hfs_table.setMaximumHeight(165)
         hfs_tab_layout.addWidget(self.hfs_table)
-        self.detail_tabs.addTab(hfs_tab, "HFS+ 目录预览")
+        self.detail_tabs.addTab(hfs_tab, "HFS+ / HFSX 目录预览")
         self.detail_tabs.setMaximumHeight(215)
         detail_layout.addWidget(self.detail_tabs)
 

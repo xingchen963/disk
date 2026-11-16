@@ -121,6 +121,11 @@ class FileSystemSignatureTests(unittest.TestCase):
         data[1024:1026] = b"H+"
         self.assertEqual(_detect_filesystem(bytes(data))[0], "Apple HFS+")
 
+    def test_hfsx_volume_signature(self):
+        data = bytearray(4096)
+        data[1024:1026] = b"HX"
+        self.assertEqual(_detect_filesystem(bytes(data))[0], "Apple HFSX")
+
 
 if __name__ == "__main__":
     unittest.main()

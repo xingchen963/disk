@@ -13,9 +13,11 @@ The application now:
 - Reads a small number of metadata sectors from the physical disk in read-only mode. The packaged EXE requests Administrator elevation for this operation.
 - Parses GPT, MBR (including extended/logical partition chains), and Apple Partition Map (APM) partition layouts.
 - Identifies BSD disklabel and Solaris VTOC signatures, but does not yet parse their partition geometry.
-- Detects common file-system/container signatures: NTFS, FAT12/16/32, exFAT, ReFS signature candidate, BitLocker, ext2/3/4, XFS, Btrfs, APFS, HFS+, Apple CoreStorage, LUKS, Linux Swap, LVM PV, UDF, and ISO 9660.
+- Detects common file-system/container signatures: NTFS, FAT12/16/32, exFAT, ReFS signature candidate, BitLocker, ext2/3/4, XFS, Btrfs, APFS, HFS+, HFSX, Apple CoreStorage, LUKS, Linux Swap, LVM PV, UDF, and ISO 9660.
 - When Windows already lists physical disks, unmatched smartctl aliases (for example `/dev/sdc`) are not displayed as additional physical disks.
-- APFS and HFS+ detection uses read-only signatures; DiskRescue does not mount, decrypt, repair, or recover macOS volumes.
+- HFS+ / HFSX volumes are inspected read-only: volume header, allocation bitmap, Catalog B-tree, folder/file names, CNIDs, paths, and data-fork logical sizes are reported when the required metadata extents are readable.
+- HFS+ / HFSX catalog inspection does not read file contents, restore files, replay a journal, decrypt volumes, or repair metadata. Extended extents are resolved through the Extents Overflow B-tree where available.
+- APFS detection currently remains signature-level only; APFS container/volume parsing is a later milestone.
 
 ## Detection limits
 
@@ -43,7 +45,7 @@ python main.py
 ## Build an EXE
 ```powershell
 pip install pyinstaller
-pyinstaller --noconfirm --clean --windowed --name DiskRescue main.py
+pyinstaller --noconfirm --clean --windowed --uac-admin --name DiskRescue main.py
 ```
 
 ## Safety rules
