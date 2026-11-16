@@ -70,19 +70,18 @@ class SmartctlImportAndSummaryTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             args=["smartctl"], returncode=0, stdout="", stderr=""
         )
-        with patch("diskrescue.smartctl.list_windows_disks", return_value=windows_rows), \\
-             patch("diskrescue.smartctl.smartctl_path", return_value="smartctl.exe"), \\
-             patch("diskrescue.smartctl._run_json", return_value=(scan_payload, completed)), \\
-             patch("diskrescue.smartctl.read_smart", return_value={
-                 "model_name": "", "serial_number": "", "user_capacity": {"bytes": 0}
-             }):
-            from diskrescue.smartctl import discover_devices
-            devices = discover_devices()
+        with patch("diskrescue.smartctl.list_windows_disks", return_value=windows_rows):
+            with patch("diskrescue.smartctl.smartctl_path", return_value="smartctl.exe"):
+                with patch("diskrescue.smartctl._run_json", return_value=(scan_payload, completed)):
+                    with patch("diskrescue.smartctl.read_smart", return_value={
+                        "model_name": "", "serial_number": "", "user_capacity": {"bytes": 0}
+                    }):
+                        from diskrescue.smartctl import discover_devices
+                        devices = discover_devices()
 
         self.assertEqual(len(devices), 3)
         self.assertEqual([item.windows_disk_number for item in devices], [0, 1, 2])
         self.assertTrue(all(item.name != "/dev/sdc" for item in devices))
-
 
 if __name__ == "__main__":
     unittest.main()
