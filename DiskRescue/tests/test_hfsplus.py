@@ -54,7 +54,7 @@ def build_hfsplus_volume():
 
     # Allocation File: one extent at allocation block 2, 10-byte bitmap.
     struct.pack_into(">QII", header, 112, 10, 0, 1)
-    struct.pack_into(">II", header, 128, 2, 1)
+    struct.pack_into(">II", header, 128, 4, 1)
 
     # Catalog File: two 4 KB B-tree nodes at allocation block 10.
     struct.pack_into(">QII", header, 272, 8192, 0, 16)
@@ -62,7 +62,7 @@ def build_hfsplus_volume():
     volume.write(1024, header)
 
     # Allocation bitmap: first 40 blocks allocated, remaining 40 free.
-    volume.write(2 * block_size, b"\xFF" * 5 + b"\x00" * 5)
+    volume.write(4 * block_size, b"\xFF" * 5 + b"\x00" * 5)
 
     # Catalog B-tree header node.
     node_size = 4096
