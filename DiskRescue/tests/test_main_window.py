@@ -22,6 +22,10 @@ class MainWindowConstructionTests(unittest.TestCase):
             self.assertEqual(window.partition_table.columnCount(), 7)
             self.assertEqual(window.details.columnCount(), 2)
             self.assertEqual(window.device_list.columnCount(), 1)
+            self.assertEqual(window.smart_attributes_table.columnCount(), 5)
+            self.assertEqual(window.smart_detail_tabs.count(), 2)
+            self.assertEqual(window.smart_detail_tabs.tabText(0), "S.M.A.R.T. 属性")
+            self.assertEqual(window.smart_detail_tabs.tabText(1), "原始数据（JSON）")
         finally:
             window.close()
 

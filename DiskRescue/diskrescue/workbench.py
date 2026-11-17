@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from .main_window import DeviceReadWorker, DiscoveryWorker, PartitionMap, human_bytes, percent
-from .smartctl import Device, summarize
+from .smartctl import Device
+from .smart_report import build_smart_report
 
 
 USER_ROLE = Qt.ItemDataRole.UserRole
@@ -262,27 +263,119 @@ class MainWindow(QMainWindow):
     def _build_smart_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(5, 7, 5, 5)
+        layout.setContentsMargins(9, 8, 9, 8)
+        layout.setSpacing(7)
 
-        self.smart_summary = QLabel("SMART 数据尚未读取。USB 闪存设备可能不支持 SMART 直通。")
-        self.smart_summary.setWordWrap(True)
-        layout.addWidget(self.smart_summary)
+        self.smart_model = QLabel("尚未读取 SMART 设备")
+        self.smart_model.setObjectName("smartModel")
+        self.smart_model.setWordWrap(True)
+        layout.addWidget(self.smart_model)
 
-        self.health_table = QTableWidget(0, 2)
-        self.health_table.setHorizontalHeaderLabels(["健康属性", "读取结果"])
-        self.health_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.health_table.setAlternatingRowColors(True)
-        self.health_table.horizontalHeader().setStretchLastSection(True)
-        self.health_table.setMaximumHeight(230)
-        layout.addWidget(self.health_table)
+        identity = QHBoxLayout()
+        self.smart_serial = QLabel("序列号：设备未提供")
+        self.smart_firmware = QLabel("固件：设备未提供")
+        self.smart_serial.setObjectName("smartIdentity")
+        self.smart_firmware.setObjectName("smartIdentity")
+        identity.addWidget(self.smart_serial)
+        identity.addSpacing(35)
+        identity.addWidget(self.smart_firmware)
+        identity.addStretch(1)
+        layout.addLayout(identity)
 
-        raw_label = QLabel("SMART 原始数据")
-        raw_label.setObjectName("panelTitle")
-        layout.addWidget(raw_label)
+        top = QHBoxLayout()
+        top.setSpacing(9)
+
+        health_panel = QFrame()
+        health_panel.setObjectName("smartHealthPanel")
+        health_panel.setMinimumWidth(175)
+        health_layout = QVBoxLayout(health_panel)
+        health_layout.setContentsMargins(12, 10, 12, 10)
+        health_label = QLabel("健康状态")
+        health_label.setObjectName("smartSmallLabel")
+        self.smart_health_value = QLabel("设备未提供")
+        self.smart_health_value.setObjectName("smartHealthValue")
+        self.smart_health_detail = QLabel("尚未读取")
+        self.smart_health_detail.setWordWrap(True)
+        self.smart_health_detail.setObjectName("smartSmallLabel")
+        temp_label = QLabel("温度")
+        temp_label.setObjectName("smartSmallLabel")
+        self.smart_temperature_value = QLabel("设备未提供")
+        self.smart_temperature_value.setObjectName("smartTemperatureValue")
+        health_layout.addWidget(health_label)
+        health_layout.addWidget(self.smart_health_value)
+        health_layout.addWidget(self.smart_health_detail)
+        health_layout.addSpacing(10)
+        health_layout.addWidget(temp_label)
+        health_layout.addWidget(self.smart_temperature_value)
+        health_layout.addStretch(1)
+        top.addWidget(health_panel, 1)
+
+        metric_panel = QFrame()
+        metric_panel.setObjectName("smartMetricPanel")
+        metric_grid = QGridLayout(metric_panel)
+        metric_grid.setContentsMargins(8, 6, 8, 6)
+        metric_grid.setHorizontalSpacing(12)
+        metric_grid.setVerticalSpacing(8)
+        self.smart_metric_values = {}
+        metric_names = [
+            "预计剩余寿命", "可用备用空间", "主机读取量总计", "主机写入量总计",
+            "通电时间", "通电次数", "传输模式", "标准", "支持的功能",
+        ]
+        for index, name in enumerate(metric_names):
+            card = QFrame()
+            card.setObjectName("smartMetricCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(8, 5, 8, 5)
+            caption = QLabel(name)
+            caption.setObjectName("smartSmallLabel")
+            value = QLabel("设备未提供")
+            value.setObjectName("smartMetricValue")
+            value.setWordWrap(True)
+            card_layout.addWidget(caption)
+            card_layout.addWidget(value)
+            self.smart_metric_values[name] = value
+            metric_grid.addWidget(card, index // 3, index % 3)
+        top.addWidget(metric_panel, 4)
+        layout.addLayout(top, 2)
+
+        self.smart_attribute_summary = QLabel("SMART 属性读取结果")
+        self.smart_attribute_summary.setObjectName("panelTitle")
+        layout.addWidget(self.smart_attribute_summary)
+
+        self.smart_detail_tabs = QTabWidget()
+        self.smart_detail_tabs.setDocumentMode(True)
+
+        attribute_page = QWidget()
+        attribute_layout = QVBoxLayout(attribute_page)
+        attribute_layout.setContentsMargins(2, 2, 2, 2)
+        self.smart_attributes_table = QTableWidget(0, 5)
+        self.smart_attributes_table.setHorizontalHeaderLabels([
+            "状态", "ID", "属性名称", "原始数据（十六进制）", "原始数据（十进制）"
+        ])
+        self.smart_attributes_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.smart_attributes_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.smart_attributes_table.setAlternatingRowColors(True)
+        self.smart_attributes_table.horizontalHeader().setStretchLastSection(True)
+        for col, width in enumerate((85, 55, 260, 230, 190)):
+            self.smart_attributes_table.setColumnWidth(col, width)
+        attribute_layout.addWidget(self.smart_attributes_table)
+        self.smart_detail_tabs.addTab(attribute_page, "S.M.A.R.T. 属性")
+
+        raw_page = QWidget()
+        raw_layout = QVBoxLayout(raw_page)
+        raw_layout.setContentsMargins(2, 2, 2, 2)
         self.raw = QPlainTextEdit()
         self.raw.setReadOnly(True)
         self.raw.setPlaceholderText("原始 SMART JSON")
-        layout.addWidget(self.raw, 1)
+        raw_layout.addWidget(self.raw)
+        self.smart_detail_tabs.addTab(raw_page, "原始数据（JSON）")
+        layout.addWidget(self.smart_detail_tabs, 5)
+
+        self.smart_summary = QLabel("SMART 数据尚未读取。")
+        self.smart_summary.setWordWrap(True)
+        self.smart_summary.setObjectName("subtleText")
+        layout.addWidget(self.smart_summary)
+
         self.detail_tabs.addTab(page, "健康信息")
 
     def _apply_workbench_style(self):
@@ -295,6 +388,15 @@ class MainWindow(QMainWindow):
             #safetyBanner { background: #e8f1ff; color: #17365d; border: 1px solid #cadcf5; padding: 6px 9px; }
             #diskSummary { background: #ffffff; border: 1px solid #d4d8de; padding: 7px 9px; font-weight: 600; }
             #panelTitle { font-weight: 600; color: #26394f; padding: 3px 1px; }
+            #smartModel { color: #153fc0; font-size: 29px; font-weight: 500; padding: 1px 4px; }
+            #smartIdentity { color: #18212d; font-size: 16px; padding: 0 8px 3px 8px; }
+            #smartHealthPanel { background: #f0f3f7; border: 1px solid #d5dbe3; border-radius: 7px; }
+            #smartMetricPanel { background: #f0f3f7; border: 1px solid #d5dbe3; border-radius: 7px; }
+            #smartMetricCard { background: #ffffff; border: 1px solid #dce1e8; border-radius: 5px; }
+            #smartSmallLabel { color: #5c6d83; font-size: 12px; }
+            #smartHealthValue { color: #27a844; font-size: 27px; font-weight: 700; }
+            #smartTemperatureValue { color: #36b94a; font-size: 25px; font-weight: 600; }
+            #smartMetricValue { color: #172d4d; font-size: 16px; font-weight: 600; }
             #subtleText { color: #5c6775; }
             QTreeWidget { background: #fffef4; border: 1px solid #d3d6db; alternate-background-color: #fafafa; }
             QTreeWidget::item { padding: 3px 2px; }
@@ -436,7 +538,7 @@ class MainWindow(QMainWindow):
         self.hfsplus_reports = hfsplus_reports or []
 
         self._update_disk_summary(device, payload, layout, smart_error)
-        self._populate_smart(payload, smart_error)
+        self._populate_smart(payload, smart_error, device)
         self._populate_partition_table(layout)
         self._populate_partition_tree(layout)
         self._populate_file_browser(self.hfsplus_reports)
@@ -696,43 +798,69 @@ class MainWindow(QMainWindow):
                 self.file_table.setItem(row, col, QTableWidgetItem(value))
             self.file_table.setRowHeight(row, 24)
 
-    def _populate_smart(self, payload, smart_error):
-        metrics = []
-        if payload:
-            log = payload.get("nvme_smart_health_information_log", {}) or {}
-            temperature = payload.get("temperature", {}).get("current", log.get("temperature"))
-            power = payload.get("power_on_time", {}).get("hours", log.get("power_on_hours"))
-            read_units = log.get("data_units_read")
-            write_units = log.get("data_units_written")
-            metrics = [
-                ("SMART 总体状态", "通过（不代表没有故障）" if payload.get("smart_status", {}).get("passed") is True else "未通过 / 未提供"),
-                ("寿命已使用", f"{log['percentage_used']}%" if "percentage_used" in log else "设备未提供"),
-                ("可用备用空间", f"{log['available_spare']}%" if "available_spare" in log else "设备未提供"),
-                ("温度", f"{temperature} °C" if temperature is not None else "设备未提供"),
-                ("通电时间", f"{power:,} 小时" if isinstance(power, (int, float)) else "设备未提供"),
-                ("异常断电", f"{log['unsafe_shutdowns']:,} 次" if "unsafe_shutdowns" in log else "设备未提供"),
-                ("介质错误", f"{log['media_errors']:,} 次" if "media_errors" in log else "设备未提供"),
-                ("数据读取量", human_bytes(read_units * 512000) if isinstance(read_units, (int, float)) else "设备未提供"),
-                ("数据写入量", human_bytes(write_units * 512000) if isinstance(write_units, (int, float)) else "设备未提供"),
-            ]
-            self.raw.setPlainText(json.dumps(payload, ensure_ascii=False, indent=2))
-            self.smart_summary.setText("SMART 信息已读取。请结合实际错误计数和设备状态判断健康状况。")
+    def _populate_smart(self, payload, smart_error, device=None):
+        fallback = {
+            "model": getattr(device, "model", ""),
+            "serial": getattr(device, "serial", ""),
+            "protocol": getattr(device, "protocol", ""),
+            "capacity_bytes": getattr(device, "capacity_bytes", None),
+            "smart_error": smart_error,
+        }
+        report = build_smart_report(payload or {}, fallback)
+        self.smart_model.setText(report["model"])
+        self.smart_serial.setText(f"序列号：{report['serial']}")
+        self.smart_firmware.setText(f"固件：{report['firmware']}")
+        self.smart_health_value.setText(report["health"])
+        self.smart_health_detail.setText(report["health_detail"])
+        self.smart_temperature_value.setText(report["temperature"])
+
+        health = report["health"]
+        if health == "良好":
+            self.smart_health_value.setStyleSheet("color:#28a745;font-size:27px;font-weight:700;")
+        elif health in {"警告", "不可用"}:
+            self.smart_health_value.setStyleSheet("color:#d04437;font-size:27px;font-weight:700;")
         else:
-            metrics = [(name, "设备未提供") for name in (
-                "SMART 总体状态", "寿命已使用", "可用备用空间", "温度", "通电时间",
-                "异常断电", "介质错误", "数据读取量", "数据写入量",
-            )]
+            self.smart_health_value.setStyleSheet("color:#9a6700;font-size:27px;font-weight:700;")
+
+        for name, value in report["metrics"]:
+            label = self.smart_metric_values.get(name)
+            if label is not None:
+                label.setText(value)
+
+        attributes = report["attributes"]
+        self.smart_attributes_table.setRowCount(len(attributes))
+        for row, attribute in enumerate(attributes):
+            values = [
+                attribute["status"],
+                attribute["id"],
+                attribute["name"],
+                attribute["raw_hex"],
+                attribute["raw_decimal"],
+            ]
+            for col, value in enumerate(values):
+                cell = QTableWidgetItem(str(value))
+                self.smart_attributes_table.setItem(row, col, cell)
+            self.smart_attributes_table.setRowHeight(row, 25)
+
+        self.smart_attribute_summary.setText(
+            f"{report['attribute_kind']} · {len(attributes)} 项 · 原始值同时显示十六进制和十进制"
+            if report["available"] else "SMART 属性不可用"
+        )
+        if report["available"]:
+            self.raw.setPlainText(json.dumps(report["raw_json"], ensure_ascii=False, indent=2))
+            self.smart_summary.setText(
+                f"协议：{report['protocol']} · 容量：{report['capacity']} · "
+                f"未提供的字段会如实显示，不以 0 代替。"
+            )
+        else:
             self.raw.setPlainText(
                 "该物理磁盘已由 Windows 识别，但没有取得 SMART 数据。\n"
-                f"原因：{smart_error or '设备或 USB 转接桥未提供 SMART 直通'}\n"
-                "磁盘与分区识别不会因此跳过。"
+                f"原因：{smart_error or '设备或 USB 转接桥未提供 SMART 直通'}"
             )
-            self.smart_summary.setText(f"SMART 不可用：{smart_error or '设备未提供 SMART 直通'}")
-
-        self.health_table.setRowCount(len(metrics))
-        for row, (name, value) in enumerate(metrics):
-            self.health_table.setItem(row, 0, QTableWidgetItem(name))
-            self.health_table.setItem(row, 1, QTableWidgetItem(value))
+            self.smart_summary.setText(
+                f"SMART 不可用：{smart_error or '设备未提供 SMART 直通'}。"
+                "磁盘与分区信息仍可继续读取。"
+            )
 
     def _on_device_read_failed(self, message):
         self.disk_summary.setText(f"读取失败：{message}")
@@ -761,7 +889,16 @@ class MainWindow(QMainWindow):
         self.details.setRowCount(0)
         self.file_table.setRowCount(0)
         self.file_summary.setText("正在读取文件系统信息……")
-        self.health_table.setRowCount(0)
+        self.smart_attributes_table.setRowCount(0)
+        self.smart_model.setText("尚未读取 SMART 设备")
+        self.smart_serial.setText("序列号：设备未提供")
+        self.smart_firmware.setText("固件：设备未提供")
+        self.smart_health_value.setText("设备未提供")
+        self.smart_health_detail.setText("尚未读取")
+        self.smart_temperature_value.setText("设备未提供")
+        for value in self.smart_metric_values.values():
+            value.setText("设备未提供")
+        self.smart_summary.setText("SMART 数据尚未读取。")
         self.raw.clear()
         self.current_partition_index = None
         self.hfsplus_reports = []
