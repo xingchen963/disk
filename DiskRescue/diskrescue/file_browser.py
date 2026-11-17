@@ -124,10 +124,13 @@ def list_windows_directory(
                     except (OverflowError, OSError, ValueError):
                         modified = "未知"
 
-                    file_id = getattr(info, "st_ino", None)
+                    # On Windows, DirEntry.stat() may return st_ino=0 even
+                    # when os.stat() provides the volume file index. Query the
+                    # path directly and do not follow symbolic links/reparse points.
                     try:
-                        file_id = int(file_id) if file_id is not None else 0
-                    except (TypeError, ValueError, OverflowError):
+                        id_info = os.stat(entry.path, follow_symlinks=False)
+                        file_id = int(getattr(id_info, "st_ino", 0) or 0)
+                    except (OSError, TypeError, ValueError, OverflowError):
                         file_id = 0
 
                     entries.append({
