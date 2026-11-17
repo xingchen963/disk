@@ -73,6 +73,25 @@ class ReadOnlyFileBrowserTests(unittest.TestCase):
         self.assertEqual(windows_root_for_partition({"DriveLetter": "D"}), "D:\\")
         self.assertEqual(windows_root_for_partition({"DriveLetter": ""}), "")
 
+    def test_does_not_traverse_symlink_or_junction_inside_selected_root(self):
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent) / "volume"
+            outside = Path(parent) / "outside"
+            root.mkdir()
+            outside.mkdir()
+            (outside / "secret.txt").write_text("not inside selected volume", encoding="utf-8")
+            link = root / "portal"
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("This Windows runner does not allow creating directory symlinks.")
+
+            result = list_windows_directory(str(link), str(root))
+            self.assertIn("重解析点", result["error"])
+            preview = read_text_preview(str(link / "secret.txt"), str(root))
+            self.assertIn("重解析点", preview["error"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

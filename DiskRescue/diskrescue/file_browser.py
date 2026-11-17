@@ -38,6 +38,36 @@ def _is_reparse_or_link(entry: os.DirEntry) -> bool:
         return True
 
 
+def _path_has_reparse_component(path: str, root_path: str) -> bool:
+    """Reject a path whose components below the selected root contain a link/junction."""
+    if not is_path_within_root(path, root_path):
+        return True
+    root = os.path.abspath(os.path.normpath(root_path))
+    target = os.path.abspath(os.path.normpath(path))
+    try:
+        relative = os.path.relpath(target, root)
+    except ValueError:
+        return True
+    if relative in ("", "."):
+        return False
+
+    current = root
+    for component in relative.split(os.sep):
+        if component in ("", "."):
+            continue
+        current = os.path.join(current, component)
+        try:
+            info = os.lstat(current)
+        except OSError:
+            # Missing or inaccessible components are not followed. The actual
+            # directory/file operation will report the concrete OS error.
+            return False
+        attributes = getattr(info, "st_file_attributes", 0)
+        if stat.S_ISLNK(info.st_mode) or attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+            return True
+    return False
+
+
 def list_windows_directory(
     path: str,
     root_path: str,
@@ -46,6 +76,8 @@ def list_windows_directory(
     """List one directory without following links or leaving the selected volume."""
     if not is_path_within_root(path, root_path):
         return {"path": path, "entries": [], "error": "访问路径超出当前分区范围，已阻止。"}
+    if _path_has_reparse_component(path, root_path):
+        return {"path": path, "entries": [], "error": "路径包含符号链接或 Windows 重解析点，已阻止跟随。"}
     if max_entries <= 0:
         return {"path": path, "entries": [], "error": "目录读取上限必须大于零。"}
 
@@ -174,6 +206,8 @@ def read_text_preview(
     """Read a strictly bounded preview of a mounted-volume file; never write to disk."""
     if not is_path_within_root(path, root_path):
         return {"error": "访问路径超出当前分区范围，已阻止。", "text": ""}
+    if _path_has_reparse_component(path, root_path):
+        return {"error": "路径包含符号链接或 Windows 重解析点，已阻止跟随。", "text": ""}
 
     if max_bytes <= 0:
         return {"error": "预览长度必须大于零。", "text": ""}
