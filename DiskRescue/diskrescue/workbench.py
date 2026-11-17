@@ -591,6 +591,7 @@ class MainWindow(QMainWindow):
         self.partition_legend.setText(
             f"分区 {len(parts)} 个 · 彩色为已用空间，白色为分区可用空间，"
             "深灰为未分配空间，浅灰表示空间使用情况未知。"
+            "极小分区按最小可视宽度显示，实际容量以分区表为准。"
         )
 
     def _update_disk_summary(self, device, payload, layout, smart_error):
