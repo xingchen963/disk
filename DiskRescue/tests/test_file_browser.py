@@ -25,6 +25,8 @@ class ReadOnlyFileBrowserTests(unittest.TestCase):
             self.assertTrue(result["entries"][0]["is_dir"])
             self.assertTrue(result["entries"][1]["is_file"])
             self.assertEqual(result["entries"][1]["size"], 5)
+            self.assertEqual(result["entries"][1]["id"], file_path.stat().st_ino)
+            self.assertEqual(result["entries"][1]["id_type"], "文件 ID")
 
     def test_blocks_paths_outside_selected_partition_root(self):
         with tempfile.TemporaryDirectory() as parent:
@@ -49,6 +51,8 @@ class ReadOnlyFileBrowserTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in root_entries], ["Docs", "README.txt"])
         docs_entries = catalog_directory_entries(catalog, "/Docs")
         self.assertEqual([item["name"] for item in docs_entries], ["note.txt"])
+        self.assertEqual(root_entries[0]["id_type"], "CNID")
+        self.assertEqual(docs_entries[0]["id"], 18)
 
     def test_text_preview_is_bounded_and_decodes_utf8(self):
         with tempfile.TemporaryDirectory() as root:

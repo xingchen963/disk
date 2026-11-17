@@ -226,6 +226,33 @@ class MainWindowConstructionTests(unittest.TestCase):
             window.close()
 
 
+    def test_file_browser_renders_native_icons_and_typed_identifiers(self):
+        window = MainWindow()
+        entries = [
+            {"kind": "文件夹", "name": "Docs", "id": 16, "id_type": "CNID",
+             "is_dir": True, "is_file": False, "is_link": False, "path": "/Docs"},
+            {"kind": "文件", "name": "note.txt", "id": 17, "id_type": "CNID",
+             "is_dir": False, "is_file": True, "is_link": False, "path": "/note.txt"},
+            {"kind": "链接 / 重解析点（不跟随）", "name": "portal", "id": 18,
+             "id_type": "文件 ID", "is_dir": False, "is_file": False, "is_link": True,
+             "path": "C:\\portal"},
+        ]
+        try:
+            header = window.file_table.horizontalHeaderItem(5)
+            self.assertEqual(header.text(), "文件 ID / CNID")
+            self.assertIn("Catalog Node ID", header.toolTip())
+            window._render_file_entries(entries)
+            self.assertEqual(window.file_table.rowCount(), 3)
+            for row in range(3):
+                name_item = window.file_table.item(row, 1)
+                self.assertFalse(name_item.icon().isNull())
+            self.assertEqual(window.file_table.item(0, 5).text(), "CNID：16")
+            self.assertEqual(window.file_table.item(1, 5).text(), "CNID：17")
+            self.assertEqual(window.file_table.item(2, 5).text(), "文件 ID：18")
+        finally:
+            window.close()
+
+
 
 if __name__ == "__main__":
     unittest.main()

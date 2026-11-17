@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QStyle,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -317,10 +318,23 @@ class MainWindow(QMainWindow):
         navigation.addWidget(self.file_go_button)
         layout.addLayout(navigation)
 
+        self.file_id_hint = QLabel(
+            "图标区分文件类型。文件 ID / CNID 是文件系统内部编号，用于关联对象与元数据；不是路径，也不是全局唯一编号。"
+        )
+        self.file_id_hint.setObjectName("subtleText")
+        self.file_id_hint.setWordWrap(True)
+        layout.addWidget(self.file_id_hint)
+
         self.file_table = QTableWidget(0, 6)
         self.file_table.setHorizontalHeaderLabels([
-            "类型", "名称", "大小 / 子项", "修改时间", "属性", "ID / CNID"
+            "类型", "名称", "大小 / 子项", "修改时间", "属性", "文件 ID / CNID"
         ])
+        id_header = self.file_table.horizontalHeaderItem(5)
+        id_header.setToolTip(
+            "Windows 已挂载卷：文件 ID（由文件系统/Windows 文件索引提供）。"
+            "HFS+ / HFSX：CNID（Catalog Node ID）。"
+            "用于区分文件系统对象、关联目录及元数据；不是路径，也不是跨磁盘全局唯一值。"
+        )
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.file_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.file_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1203,20 +1217,49 @@ class MainWindow(QMainWindow):
                 else "—" if entry.get("is_dir")
                 else human_bytes(entry.get("size"))
             )
+            identifier = entry.get("id")
+            id_label = str(entry.get("id_type") or "文件系统 ID")
+            if identifier is None or identifier == "":
+                id_text = "—"
+            else:
+                try:
+                    id_text = f"{id_label}：{int(identifier):,}"
+                except (TypeError, ValueError, OverflowError):
+                    id_text = f"{id_label}：{identifier}"
+
             values = [
                 str(entry.get("kind") or ""),
                 str(entry.get("name") or ""),
                 size,
                 str(entry.get("modified") or "—"),
                 str(entry.get("attributes") or "—"),
-                str(entry.get("id") or "—"),
+                id_text,
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col == 1:
                     item.setData(USER_ROLE, entry)
+                    if entry.get("is_link"):
+                        icon_kind = QStyle.StandardPixmap.SP_FileLinkIcon
+                        icon_tip = "链接 / 重解析点；为安全起见不会跟随"
+                    elif entry.get("is_dir"):
+                        icon_kind = QStyle.StandardPixmap.SP_DirIcon
+                        icon_tip = "文件夹；双击进入"
+                    elif entry.get("is_file"):
+                        icon_kind = QStyle.StandardPixmap.SP_FileIcon
+                        icon_tip = "文件；双击尝试只读预览"
+                    else:
+                        icon_kind = QStyle.StandardPixmap.SP_MessageBoxWarning
+                        icon_tip = "未知类型项目"
+                    item.setIcon(self.style().standardIcon(icon_kind))
+                    item.setToolTip(icon_tip)
+                elif col == 5 and identifier is not None:
+                    item.setToolTip(
+                        "文件系统内部标识。Windows 文件 ID 或 HFS+ / HFSX CNID；"
+                        "可用于关联文件系统元数据，不是路径，也不是全局唯一值。"
+                    )
                 self.file_table.setItem(row, col, item)
-            self.file_table.setRowHeight(row, 25)
+            self.file_table.setRowHeight(row, 27)
         if entries:
             self.file_table.selectRow(0)
         else:
@@ -1243,7 +1286,11 @@ class MainWindow(QMainWindow):
             f"属性：{entry.get('attributes') or '未提供'}",
         ]
         if entry.get("id") is not None:
-            details.append(f"文件系统 ID / CNID：{entry['id']}")
+            id_label = str(entry.get("id_type") or "文件系统 ID")
+            details.append(f"{id_label}：{entry['id']}")
+            details.append("用途：文件系统内部对象编号，可帮助关联目录记录和元数据；不是完整路径或全局唯一编号。")
+        else:
+            details.append("文件 ID / CNID：当前文件系统接口未提供")
         if entry.get("is_link"):
             details.append("安全限制：不会跟随符号链接或 Windows 重解析点。")
         self.file_preview.setPlainText("\n".join(details))

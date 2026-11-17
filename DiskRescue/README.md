@@ -13,6 +13,11 @@ DiskRescue is an early-stage Windows disk diagnostics and data-rescue project.
 - HFS+ / HFSX directories can be navigated from the already-read Catalog B-tree. File names, CNIDs, and logical sizes are shown; file contents are not yet readable because Data Fork extent mapping is not implemented.
 - Unmounted, encrypted, unsupported, or inaccessible partitions are not mounted or modified automatically. The browser reports why they cannot be opened.
 
+## File browser presentation and identifiers
+- File and directory names use native Windows/Qt system icons; link/reparse-point entries use a distinct link icon and are never followed.
+- The identifier column shows a Windows file ID when the platform exposes a non-zero file index, or an HFS+ / HFSX CNID from the Catalog B-tree.
+- A Windows file ID is a volume-scoped filesystem object identifier; an HFS+ CNID is a Catalog Node ID used to associate catalog records and parent/child relationships. Neither should be treated as a path or globally unique identifier.
+
 ## Current milestone: physical-disk inventory + read-only partition identification
 
 The application now:

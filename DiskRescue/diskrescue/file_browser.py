@@ -124,6 +124,12 @@ def list_windows_directory(
                     except (OverflowError, OSError, ValueError):
                         modified = "未知"
 
+                    file_id = getattr(info, "st_ino", None)
+                    try:
+                        file_id = int(file_id) if file_id is not None else 0
+                    except (TypeError, ValueError, OverflowError):
+                        file_id = 0
+
                     entries.append({
                         "name": entry.name,
                         "kind": kind,
@@ -131,6 +137,8 @@ def list_windows_directory(
                         "size": int(info.st_size) if is_file else None,
                         "modified": modified,
                         "attributes": "；".join(flags) or "正常",
+                        "id": file_id if file_id > 0 else None,
+                        "id_type": "文件 ID" if file_id > 0 else "",
                         "is_dir": bool(is_dir),
                         "is_file": bool(is_file),
                         "is_link": bool(is_link),
@@ -189,6 +197,7 @@ def catalog_directory_entries(
             "modified": "文件系统未提供",
             "attributes": "HFS+ 目录元数据",
             "id": entry.get("id"),
+            "id_type": "CNID",
             "child_count": entry.get("child_count"),
             "is_dir": is_dir,
             "is_file": not is_dir,
