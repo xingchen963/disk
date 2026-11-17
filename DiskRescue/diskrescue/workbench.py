@@ -10,8 +10,8 @@ import os
 import posixpath
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QAction, QColor, QPalette
+from PySide6.QtCore import Qt, QTimer, QThread, Signal, QUrl
+from PySide6.QtGui import QAction, QColor, QPalette, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QLineEdit,
     QPlainTextEdit,
     QProgressBar,
@@ -43,6 +44,7 @@ from .file_browser import (
     catalog_directory_entries,
     list_windows_directory,
     read_text_preview,
+    validate_file_open_target,
     windows_root_for_partition,
 )
 
@@ -306,6 +308,10 @@ class MainWindow(QMainWindow):
         self.file_up_button.clicked.connect(self._browser_up)
         self.file_refresh_button = QPushButton("刷新")
         self.file_refresh_button.clicked.connect(self._browser_refresh)
+        self.file_open_button = QPushButton("用系统程序打开")
+        self.file_open_button.clicked.connect(self._open_selected_file)
+        self.file_preview_button = QPushButton("文本预览")
+        self.file_preview_button.clicked.connect(self._preview_selected_file)
         self.file_path_edit = QLineEdit()
         self.file_path_edit.setPlaceholderText("目录路径")
         self.file_path_edit.returnPressed.connect(self._browser_go_to_path)
@@ -314,6 +320,8 @@ class MainWindow(QMainWindow):
         navigation.addWidget(self.file_back_button)
         navigation.addWidget(self.file_up_button)
         navigation.addWidget(self.file_refresh_button)
+        navigation.addWidget(self.file_open_button)
+        navigation.addWidget(self.file_preview_button)
         navigation.addWidget(self.file_path_edit, 1)
         navigation.addWidget(self.file_go_button)
         layout.addLayout(navigation)
@@ -325,11 +333,16 @@ class MainWindow(QMainWindow):
         self.file_id_hint.setWordWrap(True)
         layout.addWidget(self.file_id_hint)
 
-        self.file_table = QTableWidget(0, 6)
+        self.file_table = QTableWidget(0, 7)
         self.file_table.setHorizontalHeaderLabels([
-            "类型", "名称", "大小 / 子项", "修改时间", "属性", "文件 ID / CNID"
+            "类型", "名称", "大小 / 子项", "修改时间", "创建时间", "属性", "文件 ID / CNID"
         ])
-        id_header = self.file_table.horizontalHeaderItem(5)
+        created_header = self.file_table.horizontalHeaderItem(4)
+        created_header.setToolTip(
+            "Windows 使用文件系统提供的创建时间；HFS+ / HFSX 使用 Catalog createDate。"
+            "接口没有提供时显示未知。"
+        )
+        id_header = self.file_table.horizontalHeaderItem(6)
         id_header.setToolTip(
             "Windows 已挂载卷：文件 ID（由文件系统/Windows 文件索引提供）。"
             "HFS+ / HFSX：CNID（Catalog Node ID）。"
@@ -340,7 +353,7 @@ class MainWindow(QMainWindow):
         self.file_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.file_table.setAlternatingRowColors(True)
         self.file_table.horizontalHeader().setStretchLastSection(True)
-        for col, width in enumerate((100, 260, 145, 165, 180)):
+        for col, width in enumerate((90, 250, 135, 155, 155, 160)):
             self.file_table.setColumnWidth(col, width)
         self.file_table.cellDoubleClicked.connect(self._browser_item_activated)
         self.file_table.currentCellChanged.connect(self._browser_item_selected)
@@ -374,6 +387,8 @@ class MainWindow(QMainWindow):
         self.file_refresh_button.setEnabled(False)
         self.file_go_button.setEnabled(False)
         self.file_path_edit.setEnabled(False)
+        self.file_open_button.setEnabled(False)
+        self.file_preview_button.setEnabled(False)
         self.detail_tabs.addTab(page, "浏览文件")
 
     def _build_sector_tab(self):
@@ -1077,6 +1092,8 @@ class MainWindow(QMainWindow):
         self.file_up_button.setEnabled(False)
         self.file_refresh_button.setEnabled(False)
         self.file_go_button.setEnabled(False)
+        self.file_open_button.setEnabled(False)
+        self.file_preview_button.setEnabled(False)
 
     def _configure_file_browser(self, partition, hfs_report=None):
         self._reset_file_browser("正在准备所选分区的只读文件浏览器……")
@@ -1232,6 +1249,7 @@ class MainWindow(QMainWindow):
                 str(entry.get("name") or ""),
                 size,
                 str(entry.get("modified") or "—"),
+                str(entry.get("created") or "未知"),
                 str(entry.get("attributes") or "—"),
                 id_text,
             ]
@@ -1253,7 +1271,7 @@ class MainWindow(QMainWindow):
                         icon_tip = "未知类型项目"
                     item.setIcon(self.style().standardIcon(icon_kind))
                     item.setToolTip(icon_tip)
-                elif col == 5 and identifier is not None:
+                elif col == 6 and identifier is not None:
                     item.setToolTip(
                         "文件系统内部标识。Windows 文件 ID 或 HFS+ / HFSX CNID；"
                         "可用于关联文件系统元数据，不是路径，也不是全局唯一值。"
@@ -1267,14 +1285,28 @@ class MainWindow(QMainWindow):
 
     def _browser_item_selected(self, row, column, previous_row, previous_column):
         if row < 0:
+            self.file_open_button.setEnabled(False)
+            self.file_preview_button.setEnabled(False)
             return
         item = self.file_table.item(row, 1)
         if item is None:
+            self.file_open_button.setEnabled(False)
+            self.file_preview_button.setEnabled(False)
             return
         entry = item.data(USER_ROLE)
         if not isinstance(entry, dict):
+            self.file_open_button.setEnabled(False)
+            self.file_preview_button.setEnabled(False)
             return
+        available = (
+            self._browser_kind == "windows"
+            and bool(entry.get("is_file"))
+            and not entry.get("is_link")
+        )
+        self.file_open_button.setEnabled(available)
+        self.file_preview_button.setEnabled(available)
         self._show_file_entry_details(entry)
+
 
     def _show_file_entry_details(self, entry):
         details = [
@@ -1283,6 +1315,7 @@ class MainWindow(QMainWindow):
             f"路径：{entry.get('path', '')}",
             f"大小：{human_bytes(entry.get('size')) if entry.get('size') is not None else '目录 / 未提供'}",
             f"修改时间：{entry.get('modified') or '未提供'}",
+            f"创建时间：{entry.get('created') or '未知'}",
             f"属性：{entry.get('attributes') or '未提供'}",
         ]
         if entry.get("id") is not None:
@@ -1310,18 +1343,95 @@ class MainWindow(QMainWindow):
                 self._navigate_hfs_directory(entry.get("path", ""), add_history=True)
             return
 
-        if not entry.get("is_file"):
+        if not entry.get("is_file") or entry.get("is_link"):
             self._show_file_entry_details(entry)
             return
 
         if self._browser_kind == "hfs":
             self.file_preview.setPlainText(
-                self.file_preview.toPlainText()
-                + "\n\nHFS+ / HFSX 当前已读取目录记录和文件逻辑长度，"
-                "但尚未实现普通文件 Data Fork 的 extent 映射，因此不能预览文件正文。"
+                "HFS+ / HFSX 当前为离线只读目录浏览。虽然已读取文件名、CNID 和逻辑大小，"
+                "但尚未解析 Data Fork extent，也没有 Windows 可访问的挂载路径，"
+                "因此不能交给系统关联程序打开。"
             )
             return
 
+        self._open_file_with_system_association(entry)
+
+    def _selected_browser_entry(self):
+        row = self.file_table.currentRow()
+        if row < 0:
+            return None
+        item = self.file_table.item(row, 1)
+        if item is None:
+            return None
+        entry = item.data(USER_ROLE)
+        return entry if isinstance(entry, dict) else None
+
+    def _open_selected_file(self):
+        entry = self._selected_browser_entry()
+        if entry is None:
+            self.statusBar().showMessage("请先选择一个文件。")
+            return
+        self._open_file_with_system_association(entry)
+
+    def _open_file_with_system_association(self, entry):
+        if self._browser_kind != "windows":
+            self.file_preview.setPlainText(
+                "只有 Windows 已挂载分区中的文件，才能交给 Windows 默认关联程序打开。"
+                "HFS+ / HFSX 当前尚未挂载，暂不支持从原始 Catalog 条目启动应用。"
+            )
+            return
+        if not entry.get("is_file") or entry.get("is_link"):
+            self.statusBar().showMessage("所选项目不是可打开的普通文件。")
+            return
+
+        path = os.path.abspath(str(entry.get("path") or ""))
+        valid, reason = validate_file_open_target(path, self._browser_root)
+        if not valid:
+            QMessageBox.warning(self, "无法打开文件", reason)
+            return
+
+        risky_extensions = {
+            ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".vbs",
+            ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".scr",
+            ".msi", ".msp", ".reg", ".lnk", ".url", ".jar", ".cpl",
+            ".msc", ".appx", ".msix", ".psd1",
+        }
+        extension = os.path.splitext(path)[1].casefold()
+        if extension in risky_extensions:
+            answer = QMessageBox.warning(
+                self,
+                "确认打开可能执行代码的文件",
+                f"该文件可能启动程序、脚本、安装包或更改系统设置：\n{path}\n\n"
+                "只应打开你信任来源的文件。是否继续交给 Windows 默认关联程序？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        if QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            self.statusBar().showMessage(
+                f"已请求 Windows 使用默认关联程序打开：{os.path.basename(path)}"
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "系统无法打开文件",
+                "Windows 未能通过默认文件关联打开该文件。请检查该扩展名是否安装了关联程序。"
+                f"\n\n{path}",
+            )
+
+    def _preview_selected_file(self):
+        entry = self._selected_browser_entry()
+        if entry is None or not entry.get("is_file") or entry.get("is_link"):
+            self.statusBar().showMessage("请选择一个普通文件进行文本预览。")
+            return
+        if self._browser_kind != "windows":
+            self.file_preview.setPlainText(
+                "当前文件系统没有 Windows 挂载路径，暂不能读取文件正文。"
+            )
+            return
         preview = read_text_preview(entry.get("path", ""), self._browser_root)
         if preview.get("error") and not preview.get("text"):
             self.file_preview.setPlainText(preview["error"])
@@ -1330,6 +1440,7 @@ class MainWindow(QMainWindow):
         self.file_preview.setPlainText(
             f"{entry.get('name', '')}\n{note}\n\n{preview.get('text', '')}"
         )
+
 
     def _browser_back(self):
         if not self._browser_history:

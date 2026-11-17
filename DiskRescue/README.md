@@ -9,13 +9,16 @@ DiskRescue is an early-stage Windows disk diagnostics and data-rescue project.
 ## File browsing
 - Mounted Windows volumes with a drive letter can be browsed one directory at a time in read-only mode. Folder double-click navigates; Back, Up, Refresh, and path entry are available.
 - Directory listings do not follow symbolic links or Windows reparse points and are constrained to the selected partition root.
-- Double-clicking a mounted-volume file reads at most 128 KiB for a text/binary preview. It never writes to the source volume.
+- Double-clicking a mounted-volume file opens it with the Windows default file association; the “文本预览” button retains a bounded 128 KiB read-only preview.
+- Executables, scripts, installers, registry files, shortcuts, and similar formats require explicit confirmation before the default handler is launched.
+- The file list shows modification time followed by creation time. Windows uses the native birth/creation timestamp; HFS+ / HFSX uses Catalog createDate. Missing values are shown as unknown.
 - HFS+ / HFSX directories can be navigated from the already-read Catalog B-tree. File names, CNIDs, and logical sizes are shown; file contents are not yet readable because Data Fork extent mapping is not implemented.
 - Unmounted, encrypted, unsupported, or inaccessible partitions are not mounted or modified automatically. The browser reports why they cannot be opened.
 
 ## File browser presentation and identifiers
 - File and directory names use native Windows/Qt system icons; link/reparse-point entries use a distinct link icon and are never followed.
 - The identifier column shows a Windows file ID when the platform exposes a non-zero file index, or an HFS+ / HFSX CNID from the Catalog B-tree.
+- “用系统程序打开” requests Windows shell association for mounted-volume files. Raw HFS+ / HFSX Catalog entries cannot be launched because those volumes are not mounted.
 - A Windows file ID is a volume-scoped filesystem object identifier; an HFS+ CNID is a Catalog Node ID used to associate catalog records and parent/child relationships. Neither should be treated as a path or globally unique identifier.
 
 ## Current milestone: physical-disk inventory + read-only partition identification

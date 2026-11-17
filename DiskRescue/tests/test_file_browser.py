@@ -4,7 +4,9 @@ from pathlib import Path
 
 from diskrescue.file_browser import (
     catalog_directory_entries,
+    format_creation_time,
     is_path_within_root,
+    validate_file_open_target,
     list_windows_directory,
     read_text_preview,
     windows_root_for_partition,
@@ -12,6 +14,27 @@ from diskrescue.file_browser import (
 
 
 class ReadOnlyFileBrowserTests(unittest.TestCase):
+    def test_creation_time_uses_birth_time_and_windows_creation_fallback_only(self):
+        from datetime import datetime
+        from types import SimpleNamespace
+
+        stamp = 1_700_000_000
+        expected = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M:%S")
+        self.assertEqual(format_creation_time(SimpleNamespace(st_birthtime=stamp), windows=False), expected)
+        self.assertEqual(format_creation_time(SimpleNamespace(st_ctime=stamp), windows=True), expected)
+        self.assertEqual(format_creation_time(SimpleNamespace(st_ctime=stamp), windows=False), "未知")
+
+    def test_validate_file_open_target_restricts_root_and_regular_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            file_path = Path(root) / "open.txt"
+            file_path.write_text("safe", encoding="utf-8")
+            self.assertEqual(validate_file_open_target(str(file_path), root), (True, ""))
+            outside = Path(root).parent / "outside-file.txt"
+            outside.write_text("outside", encoding="utf-8")
+            valid, message = validate_file_open_target(str(outside), root)
+            self.assertFalse(valid)
+            self.assertIn("超出当前分区范围", message)
+
     def test_lists_directories_before_files_and_returns_metadata(self):
         with tempfile.TemporaryDirectory() as root:
             folder = Path(root) / "Docs"
@@ -27,6 +50,8 @@ class ReadOnlyFileBrowserTests(unittest.TestCase):
             self.assertEqual(result["entries"][1]["size"], 5)
             self.assertEqual(result["entries"][1]["id"], file_path.stat().st_ino)
             self.assertEqual(result["entries"][1]["id_type"], "文件 ID")
+            self.assertIn("created", result["entries"][1])
+            self.assertNotEqual(result["entries"][1]["created"], "")
 
     def test_blocks_paths_outside_selected_partition_root(self):
         with tempfile.TemporaryDirectory() as parent:
@@ -53,6 +78,7 @@ class ReadOnlyFileBrowserTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in docs_entries], ["note.txt"])
         self.assertEqual(root_entries[0]["id_type"], "CNID")
         self.assertEqual(docs_entries[0]["id"], 18)
+        self.assertEqual(root_entries[0]["created"], "文件系统未提供")
 
     def test_text_preview_is_bounded_and_decodes_utf8(self):
         with tempfile.TemporaryDirectory() as root:

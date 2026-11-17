@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import struct
 import unicodedata
+from datetime import datetime
 from typing import Any, Callable
 
 
@@ -34,6 +35,20 @@ def _u32(data: bytes, offset: int) -> int:
 
 def _u64(data: bytes, offset: int) -> int:
     return struct.unpack_from(">Q", data, offset)[0]
+
+
+_HFS_UNIX_EPOCH_DELTA = 2_082_844_800
+
+
+def _hfsplus_time_text(value: int) -> str:
+    if not value:
+        return "文件系统未提供"
+    try:
+        return datetime.fromtimestamp(int(value) - _HFS_UNIX_EPOCH_DELTA).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    except (OverflowError, OSError, TypeError, ValueError):
+        return "未知"
 
 
 def _read_exact(read_at: ReadAt, offset: int, length: int, label: str) -> bytes:
@@ -396,10 +411,12 @@ def _parse_catalog(
         record_type = _u16(record, data_start)
 
         if record_type == 1:
-            if data_start + 12 > len(record):
+            if data_start + 20 > len(record):
                 continue
             child_count = _u32(record, data_start + 4)
             folder_id = _u32(record, data_start + 8)
+            create_date = _hfsplus_time_text(_u32(record, data_start + 12))
+            modified_date = _hfsplus_time_text(_u32(record, data_start + 16))
             folder_map[folder_id] = (parent_id, name)
             if folder_id == 2 and parent_id == 1:
                 volume_name = name
@@ -411,12 +428,16 @@ def _parse_catalog(
                     "parent_id": parent_id,
                     "size": None,
                     "child_count": child_count,
+                    "created": create_date,
+                    "modified": modified_date,
                 })
 
         elif record_type == 2:
             if data_start + 96 > len(record):
                 continue
             file_id = _u32(record, data_start + 8)
+            create_date = _hfsplus_time_text(_u32(record, data_start + 12))
+            modified_date = _hfsplus_time_text(_u32(record, data_start + 16))
             data_fork_size = _u64(record, data_start + 88)
             raw_entries.append({
                 "kind": "文件",
@@ -425,6 +446,8 @@ def _parse_catalog(
                 "parent_id": parent_id,
                 "size": data_fork_size,
                 "child_count": None,
+                "created": create_date,
+                "modified": modified_date,
             })
 
         if len(raw_entries) >= max_entries:

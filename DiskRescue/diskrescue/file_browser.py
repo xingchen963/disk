@@ -68,6 +68,39 @@ def _path_has_reparse_component(path: str, root_path: str) -> bool:
     return False
 
 
+def format_creation_time(info: Any, windows: bool | None = None) -> str:
+    """Use birth/creation time; POSIX ctime is not a creation timestamp."""
+    if windows is None:
+        windows = os.name == "nt"
+    value = getattr(info, "st_birthtime", None)
+    if value is None and windows:
+        value = getattr(info, "st_ctime", None)
+    if value is None:
+        return "未知"
+    try:
+        return datetime.fromtimestamp(float(value)).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, OSError, TypeError, ValueError):
+        return "未知"
+
+
+def validate_file_open_target(path: str, root_path: str) -> tuple[bool, str]:
+    """Only permit regular non-link files contained in the selected volume."""
+    if not is_path_within_root(path, root_path):
+        return False, "文件路径超出当前分区范围，已阻止打开。"
+    if _path_has_reparse_component(path, root_path):
+        return False, "文件路径包含符号链接或 Windows 重解析点，已阻止打开。"
+    try:
+        info = os.lstat(path)
+    except OSError as exc:
+        return False, f"无法访问所选文件：{exc}"
+    attributes = getattr(info, "st_file_attributes", 0)
+    if stat.S_ISLNK(info.st_mode) or attributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+        return False, "所选项目是链接或重解析点，为安全起见不会打开。"
+    if not stat.S_ISREG(info.st_mode):
+        return False, "所选项目不是普通文件。"
+    return True, ""
+
+
 def list_windows_directory(
     path: str,
     root_path: str,
@@ -127,18 +160,21 @@ def list_windows_directory(
                     # On Windows, DirEntry.stat() may return st_ino=0 even
                     # when os.stat() provides the volume file index. Query the
                     # path directly and do not follow symbolic links/reparse points.
+                    id_info = None
                     try:
                         id_info = os.stat(entry.path, follow_symlinks=False)
                         file_id = int(getattr(id_info, "st_ino", 0) or 0)
                     except (OSError, TypeError, ValueError, OverflowError):
                         file_id = 0
 
+                    creation_info = id_info if id_info is not None else info
                     entries.append({
                         "name": entry.name,
                         "kind": kind,
                         "path": entry.path,
                         "size": int(info.st_size) if is_file else None,
                         "modified": modified,
+                        "created": format_creation_time(creation_info),
                         "attributes": "；".join(flags) or "正常",
                         "id": file_id if file_id > 0 else None,
                         "id_type": "文件 ID" if file_id > 0 else "",
@@ -197,7 +233,8 @@ def catalog_directory_entries(
             "kind": "文件夹" if is_dir else "文件",
             "path": normalized,
             "size": entry.get("size") if not is_dir else None,
-            "modified": "文件系统未提供",
+            "modified": entry.get("modified") or "文件系统未提供",
+            "created": entry.get("created") or "文件系统未提供",
             "attributes": "HFS+ 目录元数据",
             "id": entry.get("id"),
             "id_type": "CNID",

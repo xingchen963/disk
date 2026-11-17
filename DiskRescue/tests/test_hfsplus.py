@@ -17,7 +17,8 @@ class MemoryVolume:
         self.data[offset:offset + len(data)] = data
 
 
-def make_catalog_record(parent_id, name, record_type, cnid, size=0, child_count=0):
+def make_catalog_record(parent_id, name, record_type, cnid, size=0, child_count=0,
+                        create_date=0, modified_date=0):
     name_bytes = name.encode("utf-16-be")
     key_data = struct.pack(">IH", parent_id, len(name)) + name_bytes
     record = bytearray(struct.pack(">H", len(key_data)) + key_data)
@@ -25,12 +26,14 @@ def make_catalog_record(parent_id, name, record_type, cnid, size=0, child_count=
         record.append(0)
 
     if record_type == 1:
-        data = struct.pack(">HHII", 1, 0, child_count, cnid) + bytes(76)
+        data = bytearray(struct.pack(">HHII", 1, 0, child_count, cnid) + bytes(76))
     elif record_type == 2:
-        data = struct.pack(">HHII", 2, 0, 0, cnid) + bytes(76) + struct.pack(">Q", size)
+        data = bytearray(struct.pack(">HHII", 2, 0, 0, cnid) + bytes(76) + struct.pack(">Q", size))
     else:
         raise ValueError("unsupported fixture catalog record type")
 
+    struct.pack_into(">I", data, 12, create_date)
+    struct.pack_into(">I", data, 16, modified_date)
     record.extend(data)
     if len(data) & 1:
         record.append(0)
@@ -84,8 +87,10 @@ def build_hfsplus_volume():
 
     records = [
         make_catalog_record(1, "Kingston", 1, 2, child_count=1),
-        make_catalog_record(2, "Docs", 1, 16, child_count=1),
-        make_catalog_record(16, "note.txt", 2, 17, size=1234),
+        make_catalog_record(2, "Docs", 1, 16, child_count=1,
+                            create_date=3_800_000_000, modified_date=3_850_000_000),
+        make_catalog_record(16, "note.txt", 2, 17, size=1234,
+                            create_date=3_810_000_000, modified_date=3_860_000_000),
     ]
 
     # Catalog B-tree first leaf node.
@@ -171,6 +176,9 @@ class HFSPlusInspectionTests(unittest.TestCase):
         self.assertEqual(by_name["Docs"]["path"], "/Docs")
         self.assertEqual(by_name["note.txt"]["path"], "/Docs/note.txt")
         self.assertEqual(by_name["note.txt"]["size"], 1234)
+        self.assertNotEqual(by_name["Docs"]["created"], "文件系统未提供")
+        self.assertNotEqual(by_name["note.txt"]["created"], "文件系统未提供")
+        self.assertNotEqual(by_name["note.txt"]["modified"], "文件系统未提供")
 
     def test_inspects_hfsx_variant(self):
         volume = build_hfsplus_volume()

@@ -179,7 +179,9 @@ class MainWindowConstructionTests(unittest.TestCase):
     def test_file_browser_has_navigation_controls_and_preview(self):
         window = MainWindow()
         try:
-            self.assertEqual(window.file_table.columnCount(), 6)
+            self.assertEqual(window.file_table.columnCount(), 7)
+            self.assertTrue(hasattr(window, "file_open_button"))
+            self.assertTrue(hasattr(window, "file_preview_button"))
             self.assertTrue(hasattr(window, "file_back_button"))
             self.assertTrue(hasattr(window, "file_up_button"))
             self.assertTrue(hasattr(window, "file_refresh_button"))
@@ -238,7 +240,8 @@ class MainWindowConstructionTests(unittest.TestCase):
              "path": "C:\\portal"},
         ]
         try:
-            header = window.file_table.horizontalHeaderItem(5)
+            self.assertEqual(window.file_table.horizontalHeaderItem(4).text(), "创建时间")
+            header = window.file_table.horizontalHeaderItem(6)
             self.assertEqual(header.text(), "文件 ID / CNID")
             self.assertIn("Catalog Node ID", header.toolTip())
             window._render_file_entries(entries)
@@ -246,11 +249,61 @@ class MainWindowConstructionTests(unittest.TestCase):
             for row in range(3):
                 name_item = window.file_table.item(row, 1)
                 self.assertFalse(name_item.icon().isNull())
-            self.assertEqual(window.file_table.item(0, 5).text(), "CNID：16")
-            self.assertEqual(window.file_table.item(1, 5).text(), "CNID：17")
-            self.assertEqual(window.file_table.item(2, 5).text(), "文件 ID：18")
+            self.assertEqual(window.file_table.item(0, 6).text(), "CNID：16")
+            self.assertEqual(window.file_table.item(1, 6).text(), "CNID：17")
+            self.assertEqual(window.file_table.item(2, 6).text(), "文件 ID：18")
         finally:
             window.close()
+
+
+    def test_default_program_open_uses_windows_file_association(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        window = MainWindow()
+        with tempfile.TemporaryDirectory() as root:
+            file_path = Path(root) / "document.txt"
+            file_path.write_text("example", encoding="utf-8")
+            entry = {
+                "name": file_path.name, "path": str(file_path), "is_file": True,
+                "is_dir": False, "is_link": False,
+            }
+            try:
+                window._browser_kind = "windows"
+                window._browser_root = root
+                with patch("diskrescue.workbench.QDesktopServices.openUrl", return_value=True) as opener:
+                    window._open_file_with_system_association(entry)
+                opener.assert_called_once()
+                self.assertEqual(opener.call_args.args[0].toLocalFile(), str(file_path))
+            finally:
+                window.close()
+
+    def test_executable_open_requires_user_confirmation(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QMessageBox
+
+        window = MainWindow()
+        with tempfile.TemporaryDirectory() as root:
+            file_path = Path(root) / "tool.exe"
+            file_path.write_bytes(b"test only")
+            entry = {
+                "name": file_path.name, "path": str(file_path), "is_file": True,
+                "is_dir": False, "is_link": False,
+            }
+            try:
+                window._browser_kind = "windows"
+                window._browser_root = root
+                with patch("diskrescue.workbench.QMessageBox.warning",
+                           return_value=QMessageBox.StandardButton.No) as prompt:
+                    with patch("diskrescue.workbench.QDesktopServices.openUrl") as opener:
+                        window._open_file_with_system_association(entry)
+                prompt.assert_called_once()
+                opener.assert_not_called()
+            finally:
+                window.close()
 
 
 
