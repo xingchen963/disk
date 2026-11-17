@@ -1,6 +1,6 @@
 import sys
 from PySide6.QtWidgets import QApplication
-from diskrescue.main_window import MainWindow
+from diskrescue.workbench import MainWindow
 
 
 def main():

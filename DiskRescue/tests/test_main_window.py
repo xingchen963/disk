@@ -5,20 +5,23 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from diskrescue.main_window import MainWindow
-
+from diskrescue.workbench import MainWindow
 
 _APP = QApplication.instance() or QApplication([])
 
 
 class MainWindowConstructionTests(unittest.TestCase):
-    def test_main_window_constructs_hfs_catalog_tab(self):
+    def test_partition_workbench_constructs(self):
         window = MainWindow()
         try:
-            self.assertEqual(window.detail_tabs.count(), 2)
-            self.assertEqual(window.detail_tabs.tabText(0), "SMART 原始数据")
-            self.assertEqual(window.detail_tabs.tabText(1), "HFS+ / HFSX 目录预览")
-            self.assertEqual(window.hfs_table.columnCount(), 5)
+            self.assertEqual(window.detail_tabs.count(), 4)
+            self.assertEqual(
+                [window.detail_tabs.tabText(i) for i in range(window.detail_tabs.count())],
+                ["分区参数", "浏览文件", "扇区预览（只读）", "健康信息"],
+            )
+            self.assertEqual(window.partition_table.columnCount(), 7)
+            self.assertEqual(window.details.columnCount(), 2)
+            self.assertEqual(window.device_list.columnCount(), 1)
         finally:
             window.close()
 
