@@ -596,6 +596,33 @@ def inspect_hfsplus(
     }
 
 
+
+def is_hfsplus_partition_candidate(partition: dict[str, Any]) -> bool:
+    """Return True for partitions that should be probed for an HFS+ / HFSX volume header.
+
+    GPT/APM/MBR partition type is only a hint. The caller must still verify the
+    HFS+ / HFSX volume header before treating the partition as that filesystem.
+    """
+    detected = str(
+        partition.get("DetectedFileSystem")
+        or partition.get("FileSystem")
+        or ""
+    ).strip().casefold()
+    if detected.startswith(("apple hfs+", "apple hfsx")):
+        return True
+
+    type_name = str(partition.get("PartitionTypeName") or "").strip().casefold()
+    if "apple hfs" in type_name or "apple_hfs" in type_name:
+        return True
+
+    raw_guid = str(partition.get("PartitionTypeGuid") or "").strip().upper()
+    normalized_guid = raw_guid.replace("{", "").replace("}", "")
+    if normalized_guid == "48465300-0000-11AA-AA11-00306543ECAC":
+        return True
+
+    mbr_type = str(partition.get("MbrType") or "").strip().casefold()
+    return mbr_type in {"0xaf", "af"}
+
 def inspect_hfsplus_partition(
     disk_number: int,
     partition_offset: int,

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 
 from .smartctl import Device, discover_devices, read_smart, summarize
 from .disk_layout import get_disk_layout
-from .hfsplus import inspect_hfsplus_partition
+from .hfsplus import inspect_hfsplus_partition, is_hfsplus_partition_candidate
 
 
 def human_bytes(value):
@@ -79,12 +79,7 @@ class DeviceReadWorker(QThread):
             hfsplus_reports = []
             if self.device.windows_disk_number is not None and not layout.get("error"):
                 for partition in layout.get("partitions", []):
-                    detected_fs = str(
-                        partition.get("DetectedFileSystem")
-                        or partition.get("FileSystem")
-                        or ""
-                    )
-                    if detected_fs.startswith("Apple HFS+") or detected_fs.startswith("Apple HFSX"):
+                    if is_hfsplus_partition_candidate(partition):
                         hfsplus_reports.append(
                             inspect_hfsplus_partition(
                                 self.device.windows_disk_number,

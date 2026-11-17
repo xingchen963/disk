@@ -112,6 +112,40 @@ def build_hfsplus_volume():
     return volume
 
 
+class HFSPlusCandidateTests(unittest.TestCase):
+    def test_gpt_apple_hfs_type_is_probed_even_without_signature(self):
+        from diskrescue.hfsplus import is_hfsplus_partition_candidate
+
+        partition = {
+            "PartitionTypeName": "Apple HFS/HFS+ 分区",
+            "DetectedFileSystem": "Apple HFS/HFS+ 分区",
+            "PartitionTypeGuid": "48465300-0000-11AA-AA11-00306543ECAC",
+        }
+        self.assertTrue(is_hfsplus_partition_candidate(partition))
+
+    def test_apm_apple_hfs_type_is_probed(self):
+        from diskrescue.hfsplus import is_hfsplus_partition_candidate
+
+        self.assertTrue(is_hfsplus_partition_candidate({
+            "PartitionTypeName": "Apple_HFS",
+        }))
+
+    def test_mbr_af_type_is_probed(self):
+        from diskrescue.hfsplus import is_hfsplus_partition_candidate
+
+        self.assertTrue(is_hfsplus_partition_candidate({
+            "MbrType": "0xAF",
+        }))
+
+    def test_non_apple_partition_is_not_probed(self):
+        from diskrescue.hfsplus import is_hfsplus_partition_candidate
+
+        self.assertFalse(is_hfsplus_partition_candidate({
+            "PartitionTypeName": "Microsoft 基本数据分区",
+            "DetectedFileSystem": "NTFS",
+        }))
+
+
 class HFSPlusInspectionTests(unittest.TestCase):
     def test_reads_volume_header_allocation_bitmap_and_catalog(self):
         volume = build_hfsplus_volume()
