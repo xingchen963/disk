@@ -37,7 +37,7 @@ def calculate_partition_segment_widths(
     partitions: list[dict[str, Any]],
     disk_total_bytes: int,
     bar_width_pixels: int,
-    min_visible_pixels: int = 10,
+    min_visible_pixels: int = 30,
 ) -> list[int]:
     """Return segment widths that preserve total allocation and reveal tiny partitions.
 

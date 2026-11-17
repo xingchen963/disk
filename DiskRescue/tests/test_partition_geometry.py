@@ -10,7 +10,7 @@ class PartitionSegmentWidthTests(unittest.TestCase):
             {"Size": 999_800},
         ]
         widths = calculate_partition_segment_widths(parts, 1_000_000, 1000)
-        self.assertEqual(widths, [10, 990])
+        self.assertEqual(widths, [30, 970])
         self.assertEqual(sum(widths), 1000)
 
     def test_multiple_tiny_partitions_remain_separable(self):
@@ -21,7 +21,7 @@ class PartitionSegmentWidthTests(unittest.TestCase):
             {"Size": 999_400},
         ]
         widths = calculate_partition_segment_widths(parts, 1_000_000, 1200)
-        self.assertEqual(widths[:3], [10, 10, 10])
+        self.assertEqual(widths, [30, 30, 30, 1110])
         self.assertEqual(sum(widths), 1200)
 
     def test_unallocated_space_is_not_consumed_by_minimum_width(self):
@@ -46,7 +46,7 @@ class PartitionSegmentWidthTests(unittest.TestCase):
 
     def test_more_tiny_partitions_than_pixels_favors_largest_without_overflow(self):
         parts = [{"Size": size} for size in range(1, 11)]
-        widths = calculate_partition_segment_widths(parts, 55, 3, min_visible_pixels=10)
+        widths = calculate_partition_segment_widths(parts, 55, 3, min_visible_pixels=30)
         self.assertEqual(sum(widths), 3)
         self.assertEqual(sorted(widths, reverse=True), [1, 1, 1, 0, 0, 0, 0, 0, 0, 0])
 
