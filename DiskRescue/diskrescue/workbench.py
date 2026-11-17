@@ -722,6 +722,31 @@ class MainWindow(QMainWindow):
             f"{style} · {bus} · {smart_text}"
         )
 
+    def _populate_disk_map(self, layout, device):
+        layout = layout or {}
+        parts = layout.get("partitions", []) or []
+        total = int(layout.get("disk_size") or getattr(device, "capacity_bytes", 0) or 0)
+        if total <= 0:
+            total = sum(max(int(part.get("Size") or 0), 0) for part in parts)
+
+        allocated = sum(max(int(part.get("Size") or 0), 0) for part in parts)
+        unallocated = max(total - allocated, 0)
+        self.partition_map.set_data(parts, total)
+
+        summary = (
+            f"磁盘总容量：{human_bytes(total)}　"
+            f"已分配：{human_bytes(allocated)}　"
+            f"未分配：{human_bytes(unallocated)}"
+        )
+        if allocated > total > 0:
+            summary += "　警告：分区容量合计超过磁盘容量，需检查分区表是否重叠。"
+        self.partition_capacity_summary.setText(summary)
+        self.partition_legend.setText(
+            f"分区 {len(parts)} 个 · 彩色为已用空间，白色为分区可用空间，"
+            "深灰为未分配空间，浅灰表示空间使用情况未知。"
+            "极小分区按最小可视宽度显示，实际容量以分区表为准。"
+        )
+
     def _populate_partition_tree(self, layout):
         if self.current_device_index is None:
             return
