@@ -223,7 +223,7 @@ class MainWindowConstructionTests(unittest.TestCase):
             self.assertEqual(window.file_table.item(0, 1).text(), "note.txt")
 
             window._browser_item_activated(0, 1)
-            self.assertIn("尚未实现普通文件 Data Fork", window.file_preview.toPlainText())
+            self.assertIn("尚未解析 Data Fork extent", window.file_preview.toPlainText())
         finally:
             window.close()
 
@@ -275,7 +275,10 @@ class MainWindowConstructionTests(unittest.TestCase):
                 with patch("diskrescue.workbench.QDesktopServices.openUrl", return_value=True) as opener:
                     window._open_file_with_system_association(entry)
                 opener.assert_called_once()
-                self.assertEqual(opener.call_args.args[0].toLocalFile(), str(file_path))
+                self.assertEqual(
+                    Path(opener.call_args.args[0].toLocalFile()).resolve(),
+                    file_path.resolve(),
+                )
             finally:
                 window.close()
 
