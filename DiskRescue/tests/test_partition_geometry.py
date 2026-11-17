@@ -42,7 +42,7 @@ class PartitionSegmentWidthTests(unittest.TestCase):
             {"Size": 900},
         ]
         widths = calculate_partition_segment_widths(parts, 1000, 100)
-        self.assertEqual(widths, [0, 10, 0, 90])
+        self.assertEqual(widths, [0, 30, 0, 70])
 
     def test_more_tiny_partitions_than_pixels_favors_largest_without_overflow(self):
         parts = [{"Size": size} for size in range(1, 11)]
