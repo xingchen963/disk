@@ -48,7 +48,7 @@ class PartitionSegmentWidthTests(unittest.TestCase):
         parts = [{"Size": size} for size in range(1, 11)]
         widths = calculate_partition_segment_widths(parts, 55, 3, min_visible_pixels=6)
         self.assertEqual(sum(widths), 3)
-        self.assertEqual(sorted(widths, reverse=True), [1, 1, 1])
+        self.assertEqual(sorted(widths, reverse=True), [1, 1, 1, 0, 0, 0, 0, 0, 0, 0])
 
     def test_empty_or_invalid_input_is_safe(self):
         self.assertEqual(calculate_partition_segment_widths([], 1000, 100), [])
