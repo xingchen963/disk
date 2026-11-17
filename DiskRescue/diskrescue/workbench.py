@@ -6,6 +6,8 @@ workspace on the right. All disk operations remain read-only.
 """
 
 import json
+import os
+import posixpath
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
