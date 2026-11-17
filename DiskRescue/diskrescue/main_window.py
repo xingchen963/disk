@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from .smartctl import Device, discover_devices, read_smart, summarize
 from .disk_layout import get_disk_layout
 from .hfsplus import inspect_hfsplus_partition, is_hfsplus_partition_candidate
+from .partition_geometry import calculate_partition_segment_widths
 
 
 def human_bytes(value):
@@ -172,14 +173,15 @@ class PartitionMap(QWidget):
 
         x = bar.left()
         width_total = bar.width()
-        for index, part in enumerate(self.parts):
-            size = max(int(part.get("Size") or 0), 0)
-            if not size:
-                continue
-            seg_w = max(1, round(width_total * size / self.total))
-            seg_w = min(seg_w, max(0, bar.right() - x + 1))
+        segment_widths = calculate_partition_segment_widths(
+            self.parts,
+            self.total,
+            width_total,
+            min_visible_pixels=6,
+        )
+        for index, (part, seg_w) in enumerate(zip(self.parts, segment_widths)):
             if seg_w <= 0:
-                break
+                continue
 
             used = part.get("SizeUsed")
             free = part.get("SizeRemaining")
@@ -208,9 +210,14 @@ class PartitionMap(QWidget):
                 # Light gray = partition found, but used/free split unavailable.
                 painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#B8BEC7"))
 
-            # A visible separator distinguishes adjacent partitions and white free space.
-            painter.setPen(QPen(QColor("#505866"), 1))
+            # Strong left/right separators keep tiny partitions recognizable.
+            # Widths below the minimum are visually enlarged by the geometry helper.
+            painter.setPen(QPen(QColor("#263242"), 1))
             painter.drawLine(x, bar.top(), x, bar.bottom())
+            painter.drawLine(x + seg_w - 1, bar.top(), x + seg_w - 1, bar.bottom())
+            if seg_w <= 6:
+                painter.setPen(QPen(QColor("#152238"), 1))
+                painter.drawLine(x + seg_w // 2, bar.top(), x + seg_w // 2, bar.bottom())
 
             drive = str(part.get("DriveLetter") or "").strip().upper()
             if drive and seg_w >= 72:
