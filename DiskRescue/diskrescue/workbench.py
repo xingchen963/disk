@@ -172,13 +172,27 @@ class MainWindow(QMainWindow):
 
     def _build_partition_tab(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(5, 7, 5, 5)
-        layout.setSpacing(5)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(5, 7, 5, 5)
+        page_layout.setSpacing(0)
+
+        # The blank area previously belonged to the partition table's viewport.
+        # Put the table and property panel in a real vertical splitter so users
+        # can choose how much height each workspace receives.
+        self.partition_vertical_splitter = QSplitter(Qt.Orientation.Vertical, page)
+        self.partition_vertical_splitter.setObjectName("partitionVerticalSplitter")
+        self.partition_vertical_splitter.setChildrenCollapsible(False)
+        self.partition_vertical_splitter.setHandleWidth(10)
+        self.partition_vertical_splitter.setOpaqueResize(True)
+
+        partition_panel = QWidget()
+        partition_layout = QVBoxLayout(partition_panel)
+        partition_layout.setContentsMargins(0, 0, 0, 4)
+        partition_layout.setSpacing(3)
 
         partition_title = QLabel("分区列表")
         partition_title.setObjectName("panelTitle")
-        layout.addWidget(partition_title)
+        partition_layout.addWidget(partition_title)
 
         self.partition_table = QTableWidget(0, 7)
         self.partition_table.setHorizontalHeaderLabels([
@@ -198,7 +212,13 @@ class MainWindow(QMainWindow):
         for col, width in enumerate((235, 145, 120, 130, 130, 130)):
             self.partition_table.setColumnWidth(col, width)
         self.partition_table.currentCellChanged.connect(self._partition_table_row_changed)
-        layout.addWidget(self.partition_table, 3)
+        partition_layout.addWidget(self.partition_table, 1)
+        partition_panel.setMinimumHeight(125)
+
+        property_panel = QWidget()
+        property_layout = QVBoxLayout(property_panel)
+        property_layout.setContentsMargins(0, 4, 0, 0)
+        property_layout.setSpacing(3)
 
         property_header = QHBoxLayout()
         self.property_title = QLabel("分区参数")
@@ -208,7 +228,7 @@ class MainWindow(QMainWindow):
         self.property_hint = QLabel("选择上方分区查看属性")
         self.property_hint.setObjectName("subtleText")
         property_header.addWidget(self.property_hint)
-        layout.addLayout(property_header)
+        property_layout.addLayout(property_header)
 
         self.details = QTableWidget(0, 2)
         self.details.setHorizontalHeaderLabels(["属性", "读取结果"])
@@ -217,7 +237,15 @@ class MainWindow(QMainWindow):
         self.details.setAlternatingRowColors(True)
         self.details.horizontalHeader().setStretchLastSection(True)
         self.details.setColumnWidth(0, 210)
-        layout.addWidget(self.details, 2)
+        property_layout.addWidget(self.details, 1)
+        property_panel.setMinimumHeight(150)
+
+        self.partition_vertical_splitter.addWidget(partition_panel)
+        self.partition_vertical_splitter.addWidget(property_panel)
+        self.partition_vertical_splitter.setStretchFactor(0, 3)
+        self.partition_vertical_splitter.setStretchFactor(1, 2)
+        self.partition_vertical_splitter.setSizes([290, 280])
+        page_layout.addWidget(self.partition_vertical_splitter, 1)
 
         self.detail_tabs.addTab(page, "分区参数")
 
@@ -409,6 +437,17 @@ class MainWindow(QMainWindow):
             QTreeWidget::item:selected { background: #dceaff; color: #102f5d; }
             QTableWidget { background: #ffffff; gridline-color: #e0e3e7; border: 1px solid #d3d7dd; }
             QHeaderView::section { background: #e9ebee; color: #263342; padding: 5px; border: 0; border-right: 1px solid #d7dbe0; border-bottom: 1px solid #cdd2d9; }
+            QSplitter#partitionVerticalSplitter::handle:vertical {
+                background: #c8cdd4;
+                border-top: 1px solid #aeb5bf;
+                border-bottom: 1px solid #aeb5bf;
+                margin: 1px 0;
+            }
+            QSplitter#partitionVerticalSplitter::handle:vertical:hover {
+                background: #4aa8df;
+                border-top: 1px solid #287fb9;
+                border-bottom: 1px solid #287fb9;
+            }
             QTabWidget::pane { background: #ffffff; border: 1px solid #cfd4db; }
             QTabBar::tab { background: #e9ebef; padding: 7px 15px; border: 1px solid #d0d5dc; }
             QTabBar::tab:selected { background: #ffffff; color: #173b69; font-weight: 600; }

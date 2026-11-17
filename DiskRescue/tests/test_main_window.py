@@ -3,6 +3,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from diskrescue.workbench import MainWindow
@@ -26,6 +27,26 @@ class MainWindowConstructionTests(unittest.TestCase):
             self.assertEqual(window.smart_detail_tabs.count(), 2)
             self.assertEqual(window.smart_detail_tabs.tabText(0), "S.M.A.R.T. 属性")
             self.assertEqual(window.smart_detail_tabs.tabText(1), "原始数据（JSON）")
+        finally:
+            window.close()
+
+    def test_partition_and_property_panels_are_vertically_resizable(self):
+        window = MainWindow()
+        try:
+            splitter = window.partition_vertical_splitter
+            self.assertEqual(splitter.orientation(), Qt.Orientation.Vertical)
+            self.assertEqual(splitter.count(), 2)
+            self.assertGreaterEqual(splitter.handleWidth(), 8)
+
+            window.show()
+            _APP.processEvents()
+            splitter.setSizes([240, 320])
+            _APP.processEvents()
+
+            sizes = splitter.sizes()
+            self.assertEqual(len(sizes), 2)
+            self.assertGreater(sizes[0], 0)
+            self.assertGreater(sizes[1], 0)
         finally:
             window.close()
 
