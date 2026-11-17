@@ -177,7 +177,7 @@ class PartitionMap(QWidget):
             self.parts,
             self.total,
             width_total,
-            min_visible_pixels=6,
+            min_visible_pixels=10,
         )
         for index, (part, seg_w) in enumerate(zip(self.parts, segment_widths)):
             if seg_w <= 0:
@@ -215,7 +215,7 @@ class PartitionMap(QWidget):
             painter.setPen(QPen(QColor("#263242"), 1))
             painter.drawLine(x, bar.top(), x, bar.bottom())
             painter.drawLine(x + seg_w - 1, bar.top(), x + seg_w - 1, bar.bottom())
-            if seg_w <= 6:
+            if seg_w <= 10:
                 painter.setPen(QPen(QColor("#152238"), 1))
                 painter.drawLine(x + seg_w // 2, bar.top(), x + seg_w // 2, bar.bottom())
 

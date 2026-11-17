@@ -24,7 +24,7 @@ The application now:
 - The packaged EXE requests Administrator permission because raw physical-sector metadata reads require elevation on many Windows systems. Without elevation, Windows-reported GPT/MBR layout and mounted-volume file-system information are still shown, but an unmounted hidden partition may only be identified by its partition-type GUID or MBR type.
 - A file-system signature match is identification only. It does not mean that DiskRescue can mount, browse, repair, or recover that file system.
 - Linux LVM, RAID members, LUKS, BitLocker, and swap areas are identified as container/partition types where possible; their contents are not mounted or decrypted.
-- Tiny partitions receive a 6-pixel minimum visual width in the disk map; those pixels are borrowed from larger partition segments. This is only a visual aid: exact capacities are shown in the partition table.
+- Tiny partitions receive a 10-pixel minimum visual width in the disk map; those pixels are borrowed from larger partition segments. This is only a visual aid: exact capacities are shown in the partition table.
 - Windows Storage natively reports GPT, MBR, or RAW. APM is parsed from raw sectors. BSD disklabel and Solaris VTOC are signature-only at this milestone.
 - Unknown or damaged partition metadata is reported as unknown; the program must not guess a partition type or file system.
 
