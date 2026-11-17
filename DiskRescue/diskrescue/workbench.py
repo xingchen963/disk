@@ -139,6 +139,11 @@ class MainWindow(QMainWindow):
         self.disk_summary.setWordWrap(True)
         right_layout.addWidget(self.disk_summary)
 
+        self.partition_capacity_summary = QLabel("磁盘总容量：等待读取")
+        self.partition_capacity_summary.setObjectName("subtleText")
+        self.partition_capacity_summary.setWordWrap(True)
+        right_layout.addWidget(self.partition_capacity_summary)
+
         self.partition_map = PartitionMap()
         self.partition_map.setMinimumHeight(122)
         self.partition_map.setMaximumHeight(145)
@@ -539,6 +544,7 @@ class MainWindow(QMainWindow):
         self.hfsplus_reports = hfsplus_reports or []
 
         self._update_disk_summary(device, payload, layout, smart_error)
+        self._populate_disk_map(layout, device)
         self._populate_smart(payload, smart_error, device)
         self._populate_partition_table(layout)
         self._populate_partition_tree(layout)
@@ -557,6 +563,34 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
         self.disk_summary.setText(
             self.disk_summary.text().replace("正在读取……", "读取完成")
+        )
+
+    def _populate_disk_map(self, layout, device):
+        layout = layout or {}
+        parts = layout.get("partitions", []) or []
+        total = int(layout.get("disk_size") or getattr(device, "capacity_bytes", 0) or 0)
+        if total <= 0:
+            total = sum(max(int(part.get("Size") or 0), 0) for part in parts)
+
+        allocated = sum(max(int(part.get("Size") or 0), 0) for part in parts)
+        unallocated = max(total - allocated, 0)
+        overallocated = allocated > total if total > 0 else False
+
+        # PartitionMap paints colored allocated/used areas, white free space,
+        # dark-gray unallocated space, and light-gray unknown space.
+        self.partition_map.set_data(parts, total)
+
+        summary = (
+            f"磁盘总容量：{human_bytes(total)}　"
+            f"已分配：{human_bytes(allocated)}　"
+            f"未分配：{human_bytes(unallocated)}"
+        )
+        if overallocated:
+            summary += "　警告：分区容量合计超过磁盘容量，请检查分区表是否存在重叠。"
+        self.partition_capacity_summary.setText(summary)
+        self.partition_legend.setText(
+            f"分区 {len(parts)} 个 · 彩色为已用空间，白色为分区可用空间，"
+            "深灰为未分配空间，浅灰表示空间使用情况未知。"
         )
 
     def _update_disk_summary(self, device, payload, layout, smart_error):
@@ -885,6 +919,7 @@ class MainWindow(QMainWindow):
     def _clear_workbench(self):
         self.disk_summary.setText("正在读取所选磁盘……")
         self.partition_map.set_data([], 0)
+        self.partition_capacity_summary.setText("磁盘总容量：正在读取……")
         self.partition_legend.setText("正在读取分区信息……")
         self.partition_table.setRowCount(0)
         self.details.setRowCount(0)

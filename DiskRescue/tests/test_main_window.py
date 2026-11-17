@@ -29,6 +29,31 @@ class MainWindowConstructionTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_partition_capacity_summary_and_map_are_populated(self):
+        from types import SimpleNamespace
+
+        window = MainWindow()
+        try:
+            device = SimpleNamespace(capacity_bytes=1_000_000)
+            layout = {
+                "disk_size": 1_000_000,
+                "partitions": [
+                    {"Size": 600_000, "SizeUsed": 200_000, "SizeRemaining": 400_000},
+                    {"Size": 300_000, "SizeUsed": None, "SizeRemaining": None},
+                ],
+            }
+            window._populate_disk_map(layout, device)
+
+            self.assertEqual(window.partition_map.total, 1_000_000)
+            self.assertEqual(len(window.partition_map.parts), 2)
+            summary = window.partition_capacity_summary.text()
+            self.assertIn("磁盘总容量：1.00 MB", summary)
+            self.assertIn("已分配：900.00 KB", summary)
+            self.assertIn("未分配：100.00 KB", summary)
+            self.assertIn("分区 2 个", window.partition_legend.text())
+        finally:
+            window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
