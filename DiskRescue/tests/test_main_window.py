@@ -176,6 +176,56 @@ class MainWindowConstructionTests(unittest.TestCase):
             window.close()
 
 
+    def test_file_browser_has_navigation_controls_and_preview(self):
+        window = MainWindow()
+        try:
+            self.assertEqual(window.file_table.columnCount(), 6)
+            self.assertTrue(hasattr(window, "file_back_button"))
+            self.assertTrue(hasattr(window, "file_up_button"))
+            self.assertTrue(hasattr(window, "file_refresh_button"))
+            self.assertTrue(hasattr(window, "file_path_edit"))
+            self.assertTrue(window.file_preview.isReadOnly())
+            self.assertEqual(window.file_vertical_splitter.count(), 2)
+        finally:
+            window.close()
+
+    def test_hfs_catalog_browser_navigates_into_subfolders(self):
+        window = MainWindow()
+        report = {
+            "filesystem": "HFS+",
+            "catalog": {
+                "volume_name": "Kingston",
+                "entries_returned": 3,
+                "entries": [
+                    {"kind": "目录", "name": "Docs", "id": 16, "parent_id": 2,
+                     "path": "/Docs", "size": None, "child_count": 1},
+                    {"kind": "文件", "name": "README.txt", "id": 17, "parent_id": 2,
+                     "path": "/README.txt", "size": 64, "child_count": None},
+                    {"kind": "文件", "name": "note.txt", "id": 18, "parent_id": 16,
+                     "path": "/Docs/note.txt", "size": 1234, "child_count": None},
+                ],
+            },
+        }
+        partition = {"DriveLetter": "", "AccessPaths": [], "Offset": 2048}
+        try:
+            window._configure_file_browser(partition, report)
+            self.assertEqual(window._browser_kind, "hfs")
+            self.assertEqual(window._browser_path, "/")
+            self.assertEqual(window.file_table.rowCount(), 2)
+            first = window.file_table.item(0, 1)
+            self.assertEqual(first.text(), "Docs")
+
+            window._browser_item_activated(0, 1)
+            self.assertEqual(window._browser_path, "/Docs")
+            self.assertEqual(window.file_table.rowCount(), 1)
+            self.assertEqual(window.file_table.item(0, 1).text(), "note.txt")
+
+            window._browser_item_activated(0, 1)
+            self.assertIn("尚未实现普通文件 Data Fork", window.file_preview.toPlainText())
+        finally:
+            window.close()
+
+
 
 if __name__ == "__main__":
     unittest.main()

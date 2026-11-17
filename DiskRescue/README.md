@@ -6,6 +6,13 @@ DiskRescue is an early-stage Windows disk diagnostics and data-rescue project.
 - The workbench uses a dark charcoal theme across the disk tree, partition tables, properties, SMART report, tabs, menus, toolbars, scrollbars, and status bar.
 - Partition-map colors keep their capacity meaning; separators and drive labels are adjusted for contrast.
 
+## File browsing
+- Mounted Windows volumes with a drive letter can be browsed one directory at a time in read-only mode. Folder double-click navigates; Back, Up, Refresh, and path entry are available.
+- Directory listings do not follow symbolic links or Windows reparse points and are constrained to the selected partition root.
+- Double-clicking a mounted-volume file reads at most 128 KiB for a text/binary preview. It never writes to the source volume.
+- HFS+ / HFSX directories can be navigated from the already-read Catalog B-tree. File names, CNIDs, and logical sizes are shown; file contents are not yet readable because Data Fork extent mapping is not implemented.
+- Unmounted, encrypted, unsupported, or inaccessible partitions are not mounted or modified automatically. The browser reports why they cannot be opened.
+
 ## Current milestone: physical-disk inventory + read-only partition identification
 
 The application now:

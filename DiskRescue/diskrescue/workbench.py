@@ -8,7 +8,7 @@ workspace on the right. All disk operations remain read-only.
 import json
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QLineEdit,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -35,9 +36,29 @@ from PySide6.QtWidgets import (
 from .main_window import DeviceReadWorker, DiscoveryWorker, PartitionMap, human_bytes, percent
 from .smartctl import Device
 from .smart_report import build_smart_report
+from .file_browser import (
+    catalog_directory_entries,
+    list_windows_directory,
+    read_text_preview,
+    windows_root_for_partition,
+)
 
 
 USER_ROLE = Qt.ItemDataRole.UserRole
+
+
+class DirectoryReadWorker(QThread):
+    completed = Signal(int, object)
+
+    def __init__(self, token: int, path: str, root_path: str, parent=None):
+        super().__init__(parent)
+        self.token = token
+        self.path = path
+        self.root_path = root_path
+
+    def run(self):
+        result = list_windows_directory(self.path, self.root_path)
+        self.completed.emit(self.token, result)
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +84,14 @@ class MainWindow(QMainWindow):
         self._read_errors: dict[int, str] = {}
         self._discovery_thread = None
         self._building_tree = False
+        self._available_hfs_reports: list[dict[str, Any]] = []
+        self._browser_kind = "none"
+        self._browser_root = ""
+        self._browser_path = ""
+        self._browser_history: list[str] = []
+        self._browser_report: dict[str, Any] | None = None
+        self._browser_generation = 0
+        self._browser_workers: dict[int, DirectoryReadWorker] = {}
 
         self._build_menus_and_toolbar()
         self._build_workbench()
@@ -257,24 +286,78 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(5, 7, 5, 5)
+        layout.setSpacing(5)
+
         self.file_summary = QLabel(
-            "选择包含受支持文件系统的分区后，这里显示只读目录结构。"
+            "先在左侧选择一个分区。已挂载卷可逐层浏览目录；HFS+ / HFSX 显示只读目录元数据。"
         )
         self.file_summary.setWordWrap(True)
         self.file_summary.setObjectName("subtleText")
         layout.addWidget(self.file_summary)
 
-        self.file_table = QTableWidget(0, 5)
-        self.file_table.setHorizontalHeaderLabels(["类型", "名称", "CNID", "大小 / 子项", "完整路径"])
+        navigation = QHBoxLayout()
+        navigation.setSpacing(5)
+        self.file_back_button = QPushButton("返回")
+        self.file_back_button.clicked.connect(self._browser_back)
+        self.file_up_button = QPushButton("上级")
+        self.file_up_button.clicked.connect(self._browser_up)
+        self.file_refresh_button = QPushButton("刷新")
+        self.file_refresh_button.clicked.connect(self._browser_refresh)
+        self.file_path_edit = QLineEdit()
+        self.file_path_edit.setPlaceholderText("目录路径")
+        self.file_path_edit.returnPressed.connect(self._browser_go_to_path)
+        self.file_go_button = QPushButton("转到")
+        self.file_go_button.clicked.connect(self._browser_go_to_path)
+        navigation.addWidget(self.file_back_button)
+        navigation.addWidget(self.file_up_button)
+        navigation.addWidget(self.file_refresh_button)
+        navigation.addWidget(self.file_path_edit, 1)
+        navigation.addWidget(self.file_go_button)
+        layout.addLayout(navigation)
+
+        self.file_table = QTableWidget(0, 6)
+        self.file_table.setHorizontalHeaderLabels([
+            "类型", "名称", "大小 / 子项", "修改时间", "属性", "ID / CNID"
+        ])
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.file_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.file_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.file_table.setAlternatingRowColors(True)
         self.file_table.horizontalHeader().setStretchLastSection(True)
-        self.file_table.setColumnWidth(0, 75)
-        self.file_table.setColumnWidth(1, 210)
-        self.file_table.setColumnWidth(2, 90)
-        self.file_table.setColumnWidth(3, 135)
-        layout.addWidget(self.file_table, 1)
+        for col, width in enumerate((100, 260, 145, 165, 180)):
+            self.file_table.setColumnWidth(col, width)
+        self.file_table.cellDoubleClicked.connect(self._browser_item_activated)
+        self.file_table.currentCellChanged.connect(self._browser_item_selected)
+
+        self.file_vertical_splitter = QSplitter(Qt.Orientation.Vertical, page)
+        self.file_vertical_splitter.setObjectName("fileBrowserSplitter")
+        self.file_vertical_splitter.setChildrenCollapsible(False)
+        self.file_vertical_splitter.setHandleWidth(8)
+        self.file_vertical_splitter.addWidget(self.file_table)
+
+        preview_panel = QWidget()
+        preview_layout = QVBoxLayout(preview_panel)
+        preview_layout.setContentsMargins(0, 4, 0, 0)
+        preview_label = QLabel("文件信息 / 文本预览（只读）")
+        preview_label.setObjectName("panelTitle")
+        preview_layout.addWidget(preview_label)
+        self.file_preview = QPlainTextEdit()
+        self.file_preview.setReadOnly(True)
+        self.file_preview.setPlaceholderText(
+            "单击文件查看属性；双击文件夹进入目录；双击普通文件尝试读取有限长度的文本预览。"
+        )
+        preview_layout.addWidget(self.file_preview, 1)
+        self.file_vertical_splitter.addWidget(preview_panel)
+        self.file_vertical_splitter.setStretchFactor(0, 3)
+        self.file_vertical_splitter.setStretchFactor(1, 2)
+        self.file_vertical_splitter.setSizes([390, 180])
+        layout.addWidget(self.file_vertical_splitter, 1)
+
+        self.file_back_button.setEnabled(False)
+        self.file_up_button.setEnabled(False)
+        self.file_refresh_button.setEnabled(False)
+        self.file_go_button.setEnabled(False)
+        self.file_path_edit.setEnabled(False)
         self.detail_tabs.addTab(page, "浏览文件")
 
     def _build_sector_tab(self):
@@ -928,6 +1011,7 @@ class MainWindow(QMainWindow):
         self._set_property_rows(rows)
         self.property_title.setText(f"分区 {part.get('PartitionNumber', part_index + 1)} 参数")
         self.property_hint.setText(f"{human_bytes(size)} · {detected_fs}")
+        self._configure_file_browser(part, selected_report)
         self.statusBar().showMessage(
             f"已选中分区 {part.get('PartitionNumber', part_index + 1)}：{detected_fs}，"
             f"起始偏移 {offset:,} 字节。"
@@ -956,47 +1040,283 @@ class MainWindow(QMainWindow):
             self.details.setRowHeight(row, 25)
 
     def _populate_file_browser(self, reports):
+        self._available_hfs_reports = reports or []
+        self._reset_file_browser(
+            "已读取分区信息。选择一个已挂载分区，或选择可读取的 HFS+ / HFSX 分区开始浏览。"
+        )
+
+    def _reset_file_browser(self, message):
+        self._browser_generation += 1
+        self._browser_kind = "none"
+        self._browser_root = ""
+        self._browser_path = ""
+        self._browser_history = []
+        self._browser_report = None
         self.file_table.setRowCount(0)
-        summaries = []
-        all_rows = []
-        for report_index, report in enumerate(reports or [], start=1):
-            if report.get("error"):
-                summaries.append(f"Apple 分区 {report_index} 读取失败：{report['error']}")
-                continue
+        self.file_summary.setText(message)
+        self.file_preview.clear()
+        self.file_path_edit.clear()
+        self.file_path_edit.setEnabled(False)
+        self.file_back_button.setEnabled(False)
+        self.file_up_button.setEnabled(False)
+        self.file_refresh_button.setEnabled(False)
+        self.file_go_button.setEnabled(False)
 
-            catalog = report.get("catalog", {})
-            volume_name = catalog.get("volume_name") or "未命名卷"
-            summaries.append(
-                f"{volume_name} · {report.get('filesystem')} v{report.get('version')} · "
-                f"文件 {report.get('file_count', 0):,} · 文件夹 {report.get('folder_count', 0):,} · "
-                f"已列出 {catalog.get('entries_returned', 0):,} 项"
+    def _configure_file_browser(self, partition, hfs_report=None):
+        self._reset_file_browser("正在准备所选分区的只读文件浏览器……")
+        root = windows_root_for_partition(partition)
+        if root:
+            self._browser_kind = "windows"
+            self._browser_root = root
+            self._browser_path = root
+            self.file_path_edit.setEnabled(True)
+            self.file_refresh_button.setEnabled(True)
+            self.file_go_button.setEnabled(True)
+            self._navigate_windows_directory(root, add_history=False)
+            return
+
+        if hfs_report and not hfs_report.get("error"):
+            self._browser_kind = "hfs"
+            self._browser_report = hfs_report
+            self._browser_path = "/"
+            self.file_path_edit.setEnabled(True)
+            self.file_go_button.setEnabled(True)
+            self._navigate_hfs_directory("/", add_history=False)
+            return
+
+        if hfs_report and hfs_report.get("error"):
+            self.file_summary.setText(
+                f"HFS+ / HFSX 元数据读取失败：{hfs_report['error']}。"
+                "当前不会挂载或修改该分区。"
             )
-            for warning in report.get("warnings", []):
-                summaries.append(f"提示：{warning}")
+        else:
+            self.file_summary.setText(
+                "该分区没有可用盘符，也没有可用的 HFS+ / HFSX Catalog 元数据。"
+                "当前版本不能直接浏览此文件系统；不会擅自挂载、解密或修复。"
+            )
+        self.file_path_edit.setEnabled(False)
+        self.file_go_button.setEnabled(False)
 
-            for entry in catalog.get("entries", []):
-                if len(all_rows) >= 20000:
-                    break
-                if entry.get("kind") == "文件":
-                    size = human_bytes(entry.get("size"))
-                else:
-                    size = f"{int(entry.get('child_count') or 0):,} 项"
-                all_rows.append((
-                    str(entry.get("kind") or ""),
-                    str(entry.get("name") or ""),
-                    str(entry.get("id") or ""),
-                    size,
-                    str(entry.get("path") or ""),
-                ))
+    def _update_browser_navigation(self):
+        self.file_path_edit.setText(self._browser_path)
+        self.file_back_button.setEnabled(bool(self._browser_history))
+        self.file_up_button.setEnabled(
+            bool(self._browser_path)
+            and self._browser_path.rstrip("\\/") not in {
+                self._browser_root.rstrip("\\/"),
+                "/",
+            }
+        )
+        self.file_refresh_button.setEnabled(self._browser_kind == "windows")
+        self.file_go_button.setEnabled(self._browser_kind in {"windows", "hfs"})
 
-        if not reports:
-            summaries.append("尚未发现可读取的 HFS+ / HFSX 分区。其他文件系统的浏览模块将在后续版本逐步加入。")
-        self.file_summary.setText("\n".join(summaries))
-        self.file_table.setRowCount(len(all_rows))
-        for row, values in enumerate(all_rows):
+    def _navigate_windows_directory(self, path, add_history=True):
+        target = os.path.abspath(os.path.normpath(path))
+        if not self._browser_root or not self._path_is_within_root(target, self._browser_root):
+            self.file_summary.setText("访问路径超出当前分区范围，已阻止。")
+            return
+
+        if add_history and self._browser_path and target != self._browser_path:
+            self._browser_history.append(self._browser_path)
+        self._browser_kind = "windows"
+        self._browser_path = target
+        self._update_browser_navigation()
+        self.file_table.setRowCount(0)
+        self.file_preview.clear()
+        self.file_summary.setText(f"正在读取目录：{target}")
+
+        self._browser_generation += 1
+        token = self._browser_generation
+        worker = DirectoryReadWorker(token, target, self._browser_root, self)
+        self._browser_workers[token] = worker
+        worker.completed.connect(self._on_windows_directory_ready)
+        worker.finished.connect(
+            lambda request_token=token, request_worker=worker:
+                self._on_directory_worker_finished(request_token, request_worker)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    @staticmethod
+    def _path_is_within_root(path, root):
+        from .file_browser import is_path_within_root
+        return is_path_within_root(path, root)
+
+    def _on_windows_directory_ready(self, token, result):
+        if token != self._browser_generation or self._browser_kind != "windows":
+            return
+        if result.get("error"):
+            self.file_summary.setText(result["error"])
+            self.file_table.setRowCount(0)
+            return
+
+        entries = result.get("entries", [])
+        self._render_file_entries(entries)
+        folder_count = sum(1 for item in entries if item.get("is_dir"))
+        file_count = sum(1 for item in entries if item.get("is_file"))
+        summary = (
+            f"{self._browser_path} · {folder_count:,} 个文件夹 · "
+            f"{file_count:,} 个文件 · 只读浏览"
+        )
+        if result.get("truncated"):
+            summary += " · 目录项目达到显示上限，列表已截断"
+        warnings = result.get("warnings") or []
+        if warnings:
+            summary += f" · {len(warnings)} 个项目无法读取"
+        self.file_summary.setText(summary)
+
+    def _on_directory_worker_finished(self, token, worker):
+        if self._browser_workers.get(token) is worker:
+            self._browser_workers.pop(token, None)
+
+    def _navigate_hfs_directory(self, path, add_history=True):
+        if not self._browser_report or self._browser_report.get("error"):
+            return
+        target = posixpath.normpath("/" + str(path or "/").lstrip("/"))
+        if not target.startswith("/"):
+            self.file_summary.setText("HFS+ 路径无效。")
+            return
+
+        catalog = self._browser_report.get("catalog", {})
+        if add_history and self._browser_path and target != self._browser_path:
+            self._browser_history.append(self._browser_path)
+        self._browser_kind = "hfs"
+        self._browser_path = target
+        self._update_browser_navigation()
+        entries = catalog_directory_entries(catalog, target)
+        self._render_file_entries(entries)
+        volume_name = catalog.get("volume_name") or "未命名卷"
+        self.file_summary.setText(
+            f"{volume_name}:{target} · {len(entries):,} 个直接子项目 · "
+            f"{self._browser_report.get('filesystem')} 只读 Catalog 浏览。"
+            "HFS+ 文件内容读取尚未开放。"
+        )
+
+    def _render_file_entries(self, entries):
+        self.file_table.setRowCount(len(entries))
+        for row, entry in enumerate(entries):
+            size = (
+                f"{int(entry.get('child_count') or 0):,} 项"
+                if entry.get("is_dir") and entry.get("child_count") is not None
+                else "—" if entry.get("is_dir")
+                else human_bytes(entry.get("size"))
+            )
+            values = [
+                str(entry.get("kind") or ""),
+                str(entry.get("name") or ""),
+                size,
+                str(entry.get("modified") or "—"),
+                str(entry.get("attributes") or "—"),
+                str(entry.get("id") or "—"),
+            ]
             for col, value in enumerate(values):
-                self.file_table.setItem(row, col, QTableWidgetItem(value))
-            self.file_table.setRowHeight(row, 24)
+                item = QTableWidgetItem(value)
+                if col == 1:
+                    item.setData(USER_ROLE, entry)
+                self.file_table.setItem(row, col, item)
+            self.file_table.setRowHeight(row, 25)
+        if entries:
+            self.file_table.selectRow(0)
+        else:
+            self.file_preview.setPlainText("当前目录为空，或 Catalog 中没有可显示的直接子项目。")
+
+    def _browser_item_selected(self, row, column, previous_row, previous_column):
+        if row < 0:
+            return
+        item = self.file_table.item(row, 1)
+        if item is None:
+            return
+        entry = item.data(USER_ROLE)
+        if not isinstance(entry, dict):
+            return
+        self._show_file_entry_details(entry)
+
+    def _show_file_entry_details(self, entry):
+        details = [
+            f"名称：{entry.get('name', '')}",
+            f"类型：{entry.get('kind', '')}",
+            f"路径：{entry.get('path', '')}",
+            f"大小：{human_bytes(entry.get('size')) if entry.get('size') is not None else '目录 / 未提供'}",
+            f"修改时间：{entry.get('modified') or '未提供'}",
+            f"属性：{entry.get('attributes') or '未提供'}",
+        ]
+        if entry.get("id") is not None:
+            details.append(f"文件系统 ID / CNID：{entry['id']}")
+        if entry.get("is_link"):
+            details.append("安全限制：不会跟随符号链接或 Windows 重解析点。")
+        self.file_preview.setPlainText("\n".join(details))
+
+    def _browser_item_activated(self, row, column):
+        item = self.file_table.item(row, 1)
+        if item is None:
+            return
+        entry = item.data(USER_ROLE)
+        if not isinstance(entry, dict):
+            return
+
+        if entry.get("is_dir"):
+            if self._browser_kind == "windows":
+                self._navigate_windows_directory(entry.get("path", ""), add_history=True)
+            elif self._browser_kind == "hfs":
+                self._navigate_hfs_directory(entry.get("path", ""), add_history=True)
+            return
+
+        if not entry.get("is_file"):
+            self._show_file_entry_details(entry)
+            return
+
+        if self._browser_kind == "hfs":
+            self.file_preview.setPlainText(
+                self.file_preview.toPlainText()
+                + "\n\nHFS+ / HFSX 当前已读取目录记录和文件逻辑长度，"
+                "但尚未实现普通文件 Data Fork 的 extent 映射，因此不能预览文件正文。"
+            )
+            return
+
+        preview = read_text_preview(entry.get("path", ""), self._browser_root)
+        if preview.get("error") and not preview.get("text"):
+            self.file_preview.setPlainText(preview["error"])
+            return
+        note = preview.get("note") or preview.get("error") or "二进制数据预览"
+        self.file_preview.setPlainText(
+            f"{entry.get('name', '')}\n{note}\n\n{preview.get('text', '')}"
+        )
+
+    def _browser_back(self):
+        if not self._browser_history:
+            return
+        target = self._browser_history.pop()
+        if self._browser_kind == "windows":
+            self._navigate_windows_directory(target, add_history=False)
+        elif self._browser_kind == "hfs":
+            self._navigate_hfs_directory(target, add_history=False)
+
+    def _browser_up(self):
+        if self._browser_kind == "windows":
+            parent = os.path.dirname(self._browser_path.rstrip("\\/"))
+            if not parent:
+                parent = self._browser_root
+            self._navigate_windows_directory(parent, add_history=True)
+        elif self._browser_kind == "hfs":
+            parent = posixpath.dirname(self._browser_path.rstrip("/")) or "/"
+            self._navigate_hfs_directory(parent, add_history=True)
+
+    def _browser_refresh(self):
+        if self._browser_kind == "windows":
+            self._navigate_windows_directory(self._browser_path, add_history=False)
+        elif self._browser_kind == "hfs":
+            self._navigate_hfs_directory(self._browser_path, add_history=False)
+
+    def _browser_go_to_path(self):
+        raw = self.file_path_edit.text().strip()
+        if not raw:
+            return
+        if self._browser_kind == "windows":
+            target = raw if os.path.isabs(raw) else os.path.join(self._browser_path, raw)
+            self._navigate_windows_directory(target, add_history=True)
+        elif self._browser_kind == "hfs":
+            self._navigate_hfs_directory(raw, add_history=True)
+
 
     def _populate_smart(self, payload, smart_error, device=None):
         fallback = {
@@ -1104,8 +1424,7 @@ class MainWindow(QMainWindow):
         self.partition_legend.setText("正在读取分区信息……")
         self.partition_table.setRowCount(0)
         self.details.setRowCount(0)
-        self.file_table.setRowCount(0)
-        self.file_summary.setText("正在读取文件系统信息……")
+        self._reset_file_browser("正在读取文件系统信息……")
         self.smart_attributes_table.setRowCount(0)
         self.smart_model.setText("尚未读取 SMART 设备")
         self.smart_serial.setText("序列号：设备未提供")
@@ -1122,7 +1441,7 @@ class MainWindow(QMainWindow):
 
 
     def closeEvent(self, event):
-        workers = list(self._read_workers.values())
+        workers = list(self._read_workers.values()) + list(self._browser_workers.values())
         if self._discovery_thread is not None:
             workers.append(self._discovery_thread)
         for worker in workers:
