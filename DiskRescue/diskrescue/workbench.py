@@ -9,7 +9,7 @@ import json
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -417,45 +417,68 @@ class MainWindow(QMainWindow):
         self.detail_tabs.addTab(page, "健康信息")
 
     def _apply_workbench_style(self):
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#161b22"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#e6edf3"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#0f141b"))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#1d2632"))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#222c38"))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#f0f4f8"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#e6edf3"))
+        palette.setColor(QPalette.ColorRole.Button, QColor("#263241"))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#e6edf3"))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor("#245b8e"))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+        self.setPalette(palette)
+
         self.setStyleSheet("""
-            QMainWindow, QWidget { background: #f3f4f6; color: #20252b; }
-            QMenuBar { background: #f7f7f7; border-bottom: 1px solid #d4d7dc; }
-            QMenuBar::item { padding: 5px 10px; }
-            QToolBar { background: #f7f7f7; border: 0; border-bottom: 1px solid #d7dbe0; spacing: 8px; padding: 4px; }
-            QToolButton { padding: 5px 10px; }
-            #safetyBanner { background: #e8f1ff; color: #17365d; border: 1px solid #cadcf5; padding: 6px 9px; }
-            #diskSummary { background: #ffffff; border: 1px solid #d4d8de; padding: 7px 9px; font-weight: 600; }
-            #panelTitle { font-weight: 600; color: #26394f; padding: 3px 1px; }
-            #smartModel { color: #153fc0; font-size: 29px; font-weight: 500; padding: 1px 4px; }
-            #smartIdentity { color: #18212d; font-size: 16px; padding: 0 8px 3px 8px; }
-            #smartHealthPanel { background: #f0f3f7; border: 1px solid #d5dbe3; border-radius: 7px; }
-            #smartMetricPanel { background: #f0f3f7; border: 1px solid #d5dbe3; border-radius: 7px; }
-            #smartMetricCard { background: #ffffff; border: 1px solid #dce1e8; border-radius: 5px; }
-            #smartSmallLabel { color: #5c6d83; font-size: 12px; }
-            #smartHealthValue { color: #27a844; font-size: 27px; font-weight: 700; }
-            #smartTemperatureValue { color: #36b94a; font-size: 25px; font-weight: 600; }
-            #smartMetricValue { color: #172d4d; font-size: 16px; font-weight: 600; }
-            #subtleText { color: #5c6775; }
-            QTreeWidget { background: #fffef4; border: 1px solid #d3d6db; alternate-background-color: #fafafa; }
-            QTreeWidget::item { padding: 3px 2px; }
-            QTreeWidget::item:selected { background: #dceaff; color: #102f5d; }
-            QTableWidget { background: #ffffff; gridline-color: #e0e3e7; border: 1px solid #d3d7dd; }
-            QHeaderView::section { background: #e9ebee; color: #263342; padding: 5px; border: 0; border-right: 1px solid #d7dbe0; border-bottom: 1px solid #cdd2d9; }
-            QSplitter#partitionVerticalSplitter::handle:vertical {
-                background: #c8cdd4;
-                border-top: 1px solid #aeb5bf;
-                border-bottom: 1px solid #aeb5bf;
-                margin: 1px 0;
-            }
-            QSplitter#partitionVerticalSplitter::handle:vertical:hover {
-                background: #4aa8df;
-                border-top: 1px solid #287fb9;
-                border-bottom: 1px solid #287fb9;
-            }
-            QTabWidget::pane { background: #ffffff; border: 1px solid #cfd4db; }
-            QTabBar::tab { background: #e9ebef; padding: 7px 15px; border: 1px solid #d0d5dc; }
-            QTabBar::tab:selected { background: #ffffff; color: #173b69; font-weight: 600; }
-            QStatusBar { background: #f4f5f6; border-top: 1px solid #d4d7dc; }
+            QWidget, QMainWindow { background: #161b22; color: #e6edf3; }
+            QMenuBar, QToolBar { background: #202833; color: #e6edf3; border-bottom: 1px solid #394656; padding: 4px; }
+            QMenuBar::item { padding: 6px 10px; }
+            QMenuBar::item:selected, QMenu::item:selected { background: #245b8e; color: #ffffff; }
+            QMenu { background: #202833; color: #e6edf3; border: 1px solid #465365; }
+            QMenu::item { padding: 6px 22px; }
+            QToolButton, QPushButton { background: #2a3543; color: #e6edf3; border: 1px solid #465365; border-radius: 4px; padding: 5px 10px; }
+            QToolButton:hover, QPushButton:hover { background: #35465a; border-color: #79b8ff; }
+            QToolButton:pressed, QPushButton:pressed { background: #1d4d78; }
+            QToolButton:disabled, QPushButton:disabled { color: #748294; background: #202833; }
+            #safetyBanner { background: #172d43; color: #c8e1ff; border: 1px solid #31577b; padding: 7px 10px; }
+            #diskSummary { background: #202a36; color: #e6edf3; border: 1px solid #3b4858; padding: 8px 10px; font-weight: 600; }
+            #panelTitle { color: #d8e5f3; font-weight: 600; padding: 4px 1px; }
+            #smartModel { color: #79b8ff; font-size: 29px; font-weight: 500; padding: 1px 4px; }
+            #smartIdentity { color: #cbd5e1; font-size: 16px; padding: 0 8px 3px 8px; }
+            #smartHealthPanel, #smartMetricPanel { background: #202a36; border: 1px solid #3b4858; border-radius: 7px; }
+            #smartMetricCard { background: #263241; border: 1px solid #405064; border-radius: 5px; }
+            #smartSmallLabel, #subtleText { color: #9eafc2; }
+            #smartHealthValue { color: #56d364; font-size: 27px; font-weight: 700; }
+            #smartTemperatureValue { color: #7ee787; font-size: 25px; font-weight: 600; }
+            #smartMetricValue { color: #e6edf3; font-size: 16px; font-weight: 600; }
+            QTreeWidget { background: #1b232e; color: #e6edf3; border: 1px solid #394656; alternate-background-color: #202a36; outline: 0; }
+            QTreeWidget::item { padding: 4px 3px; }
+            QTreeWidget::item:hover { background: #2a3b4f; }
+            QTreeWidget::item:selected { background: #245b8e; color: #ffffff; }
+            QTableWidget, QTableView { background: #171e28; color: #e6edf3; alternate-background-color: #1d2632; gridline-color: #354252; border: 1px solid #3b4858; selection-background-color: #245b8e; selection-color: #ffffff; outline: 0; }
+            QTableWidget::item, QTableView::item { padding: 3px; }
+            QTableWidget::item:selected, QTableView::item:selected { background: #245b8e; color: #ffffff; }
+            QHeaderView::section { background: #263241; color: #dce6f1; padding: 6px; border: 0; border-right: 1px solid #3a4859; border-bottom: 1px solid #455468; }
+            QTabWidget::pane { background: #171e28; border: 1px solid #394656; }
+            QTabBar::tab { background: #222c38; color: #b9c7d6; padding: 8px 16px; border: 1px solid #3b4858; }
+            QTabBar::tab:hover { background: #2b3949; color: #ffffff; }
+            QTabBar::tab:selected { background: #171e28; color: #79b8ff; font-weight: 600; }
+            QPlainTextEdit, QTextEdit, QLineEdit { background: #0f141b; color: #dce6f1; border: 1px solid #3b4858; selection-background-color: #245b8e; }
+            QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit { background: #202a36; color: #e6edf3; border: 1px solid #465365; padding: 5px 7px; }
+            QCheckBox, QRadioButton { color: #dce6f1; }
+            QProgressBar { background: #222d3a; color: #e6edf3; border: 1px solid #465365; border-radius: 4px; text-align: center; }
+            QProgressBar::chunk { background: #3478c8; }
+            QSplitter#partitionVerticalSplitter::handle:vertical { background: #394656; border-top: 1px solid #566579; border-bottom: 1px solid #566579; margin: 1px 0; }
+            QSplitter#partitionVerticalSplitter::handle:vertical:hover { background: #3478c8; }
+            QScrollBar:vertical { background: #171e28; width: 12px; margin: 0; }
+            QScrollBar:horizontal { background: #171e28; height: 12px; margin: 0; }
+            QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #48586b; border-radius: 5px; min-height: 24px; min-width: 24px; }
+            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #627d9d; }
+            QScrollBar::add-line, QScrollBar::sub-line { background: #202a36; border: 0; width: 0; height: 0; }
+            QToolTip { background: #202a36; color: #f0f4f8; border: 1px solid #607086; padding: 4px; }
+            QStatusBar { background: #202833; color: #aebdce; border-top: 1px solid #354151; }
         """)
 
     def _show_safety_help(self):

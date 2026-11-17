@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication, QTreeWidgetItem
 
 from diskrescue.workbench import MainWindow, USER_ROLE
@@ -161,6 +162,19 @@ class MainWindowConstructionTests(unittest.TestCase):
             display.assert_not_called()
         finally:
             window.close()
+
+    def test_dark_theme_palette_and_major_widgets(self):
+        window = MainWindow()
+        try:
+            self.assertEqual(window.palette().color(QPalette.ColorRole.Window).name(), "#161b22")
+            style = window.styleSheet()
+            for selector in ("QTreeWidget", "QTableWidget", "QTabBar::tab", "QMenuBar", "QScrollBar", "#smartMetricCard"):
+                self.assertIn(selector, style)
+            self.assertIn("#171e28", style)
+            self.assertIn("#245b8e", style)
+        finally:
+            window.close()
+
 
 
 if __name__ == "__main__":

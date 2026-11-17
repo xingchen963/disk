@@ -204,7 +204,7 @@ class PartitionMap(QWidget):
                     QColor("#FFFFFF")
                 )
                 if 0 < used_w < seg_w:
-                    painter.setPen(QPen(QColor("#606873"), 1))
+                    painter.setPen(QPen(QColor("#3d4a59"), 1))
                     painter.drawLine(x + used_w, bar.top(), x + used_w, bar.bottom())
             else:
                 # Light gray = partition found, but used/free split unavailable.
@@ -214,7 +214,7 @@ class PartitionMap(QWidget):
             # The outer bar outline supplies the first/last outer edges.
             # Do not draw artificial center marks inside minimum-width partitions.
             if index > 0:
-                painter.setPen(QPen(QColor("#263242"), 1))
+                painter.setPen(QPen(QColor("#d6deea"), 1))
                 painter.drawLine(x, bar.top(), x, bar.bottom())
 
             drive = str(part.get("DriveLetter") or "").strip().upper()
@@ -224,7 +224,8 @@ class PartitionMap(QWidget):
                 label_font.setPointSize(17)
                 label_font.setBold(True)
                 painter.setFont(label_font)
-                painter.setPen(QColor("#000000"))
+                label_color = "#17202b" if index % len(self.COLORS) == 2 else "#f8fafc"
+                painter.setPen(QColor(label_color))
                 painter.drawText(
                     QRect(x + 2, bar.top(), max(seg_w - 4, 1), bar.height()),
                     Qt.AlignmentFlag.AlignCenter,
@@ -236,7 +237,7 @@ class PartitionMap(QWidget):
                 break
 
         # Draw a dark outline around the full-width map.
-        painter.setPen(QPen(QColor("#39414c"), 1))
+        painter.setPen(QPen(QColor("#a9b7c7"), 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(bar)
 
@@ -257,7 +258,7 @@ class PartitionMap(QWidget):
         for color, label, needs_outline in legend_items:
             swatch = QRect(legend_x, legend_y, 12, 12)
             painter.fillRect(swatch, QColor(color))
-            painter.setPen(QPen(QColor("#596273" if needs_outline or color == "#454d5a" else color), 1))
+            painter.setPen(QPen(QColor("#a9b7c7" if needs_outline or color == "#454d5a" else color), 1))
             painter.drawRect(swatch)
             painter.setPen(QColor(self.palette().color(self.foregroundRole())))
             painter.drawText(legend_x + 17, legend_y + fm.ascent(), label)

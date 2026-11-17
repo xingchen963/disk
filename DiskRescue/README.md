@@ -2,6 +2,10 @@
 
 DiskRescue is an early-stage Windows disk diagnostics and data-rescue project.
 
+## Interface
+- The workbench uses a dark charcoal theme across the disk tree, partition tables, properties, SMART report, tabs, menus, toolbars, scrollbars, and status bar.
+- Partition-map colors keep their capacity meaning; separators and drive labels are adjusted for contrast.
+
 ## Current milestone: physical-disk inventory + read-only partition identification
 
 The application now:
