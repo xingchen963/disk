@@ -56,9 +56,12 @@ class MainWindow(QMainWindow):
         self.current_payload: dict[str, Any] | None = None
         self.current_layout: dict[str, Any] | None = None
         self.hfsplus_reports: list[dict[str, Any]] = []
-        self._read_thread = None
+        # Per-disk workers and result cache: switching disks never repeats a
+        # completed SMART/partition/filesystem read.
+        self._device_cache: dict[int, dict[str, Any]] = {}
+        self._read_workers: dict[int, DeviceReadWorker] = {}
+        self._read_errors: dict[int, str] = {}
         self._discovery_thread = None
-        self._reading_device = None
         self._building_tree = False
 
         self._build_menus_and_toolbar()
@@ -124,6 +127,7 @@ class MainWindow(QMainWindow):
         self.device_list.setUniformRowHeights(True)
         self.device_list.setIndentation(18)
         self.device_list.currentItemChanged.connect(self._tree_selection_changed)
+        self.device_list.itemDoubleClicked.connect(self._tree_item_double_clicked)
         left_layout.addWidget(self.device_list)
         left_panel.setMinimumWidth(255)
         left_panel.setMaximumWidth(360)
@@ -463,16 +467,26 @@ class MainWindow(QMainWindow):
     def scan(self):
         if self._discovery_thread is not None and self._discovery_thread.isRunning():
             return
-        if self._read_thread is not None and self._read_thread.isRunning():
-            self.statusBar().showMessage("当前磁盘正在读取，请完成后再扫描。")
+        running = [
+            index for index, worker in self._read_workers.items()
+            if worker is not None and worker.isRunning()
+        ]
+        if running:
+            self.statusBar().showMessage(
+                "仍有磁盘正在读取；请等待当前读取结束后再重新扫描磁盘清单。"
+            )
             return
 
         self.scan_action.setEnabled(False)
         self.devices = []
         self.device_items.clear()
+        self._device_cache.clear()
+        self._read_errors.clear()
         self.current_device_index = None
         self.current_partition_index = None
+        self.current_payload = None
         self.current_layout = None
+        self.hfsplus_reports = []
         self.device_list.blockSignals(True)
         self.device_list.clear()
         self.device_list.blockSignals(False)
@@ -486,6 +500,7 @@ class MainWindow(QMainWindow):
         self._discovery_thread.finished.connect(self._on_discovery_thread_finished)
         self._discovery_thread.finished.connect(self._discovery_thread.deleteLater)
         self._discovery_thread.start()
+
 
     def _on_devices_found(self, devices):
         self.devices = devices or []
@@ -507,19 +522,23 @@ class MainWindow(QMainWindow):
                 f"{device.name}\n型号：{name}\n容量：{human_bytes(device.capacity_bytes)}"
                 f"\n总线：{device.bus_type or device.protocol or '未知'}"
                 f"\n分区表：{device.partition_style or '未知'}"
-                f"\nSMART：{'可用' if device.smart_supported else '不可用'}",
+                f"\nSMART：{'可用' if device.smart_supported else '不可用'}"
+                "\n单击：切换 / 查看缓存；双击：重新读取该磁盘",
             )
             self.device_list.addTopLevelItem(root)
             self.device_items[index] = root
 
-        self.device_list.blockSignals(False)
         if not self.devices:
+            self.device_list.blockSignals(False)
             self.disk_summary.setText("没有发现 Windows 可枚举的物理磁盘。")
             self.statusBar().showMessage("未发现物理磁盘")
             return
 
+        # Avoid currentItemChanged causing a duplicate first read.
         self.device_list.setCurrentItem(self.device_items[0])
+        self.device_list.blockSignals(False)
         self.selection_changed(0)
+
 
     def _tree_selection_changed(self, current, previous):
         if self._building_tree or current is None:
@@ -528,6 +547,7 @@ class MainWindow(QMainWindow):
         if not data:
             return
         if data[0] == "disk":
+            # A single click switches to this disk; existing results are reused.
             self.selection_changed(int(data[1]))
         elif data[0] == "partition":
             disk_index = int(data[1])
@@ -535,52 +555,135 @@ class MainWindow(QMainWindow):
             if disk_index == self.current_device_index and self.current_layout is not None:
                 self._select_partition(part_index, sync_tree=False)
 
-    def selection_changed(self, index: int):
+    def _tree_item_double_clicked(self, item, column):
+        data = item.data(0, USER_ROLE)
+        if not data or data[0] != "disk":
+            return
+        # Only a double-click on the physical-disk root forces a fresh read.
+        self.selection_changed(int(data[1]), force_refresh=True)
+
+    def selection_changed(self, index: int, force_refresh: bool = False):
         if index < 0 or index >= len(self.devices):
             return
-        if self._read_thread is not None and self._read_thread.isRunning():
+
+        previous_index = self.current_device_index
+        self.current_device_index = index
+        device = self.devices[index]
+
+        active_worker = self._read_workers.get(index)
+        if active_worker is not None and active_worker.isRunning():
+            if previous_index != index and self.current_layout is not None:
+                self.current_partition_index = None
+                self.current_payload = None
+                self.current_layout = None
+                self.hfsplus_reports = []
+                self._clear_workbench()
+            self.disk_summary.setText(
+                f"{device.model or device.name} · {human_bytes(device.capacity_bytes)} · 正在读取……"
+            )
+            self.statusBar().showMessage(
+                f"{device.model or device.name} 正在读取；不会重复启动读取任务。"
+            )
             return
-        if index == self.current_device_index and self.current_layout is not None:
+
+        cached = self._device_cache.get(index)
+        if cached is not None and not force_refresh:
+            self._display_device_result(index, cached)
+            self.statusBar().showMessage(
+                f"已切换到缓存结果：{device.model or device.name}。单击不重新读取，双击可刷新。"
+            )
+            return
+
+        if previous_index != index and not force_refresh:
+            self.current_partition_index = None
+            self.current_payload = None
+            self.current_layout = None
+            self.hfsplus_reports = []
+            self._clear_workbench()
+
+        if not force_refresh:
+            root_item = self.device_items.get(index)
+            if root_item is not None:
+                self._building_tree = True
+                root_item.takeChildren()
+                self._building_tree = False
+        else:
+            # Keep the previous successful content visible until refresh finishes.
+            self.statusBar().showMessage(
+                f"正在重新读取 {device.model or device.name}……"
+            )
+
+        self.disk_summary.setText(
+            f"{device.model or device.name} · {human_bytes(device.capacity_bytes)} · "
+            f"{device.bus_type or device.protocol or '总线未知'} · "
+            f"{'正在重新读取……' if force_refresh else '正在读取……'}"
+        )
+        self._start_device_read(index, force_refresh=force_refresh)
+
+    def _start_device_read(self, index: int, force_refresh: bool = False):
+        if index < 0 or index >= len(self.devices):
+            return
+        existing = self._read_workers.get(index)
+        if existing is not None and existing.isRunning():
             return
 
         device = self.devices[index]
-        self.current_device_index = index
-        self.current_partition_index = None
-        self.current_layout = None
-        self._reading_device = device
-        self.device_list.setEnabled(False)
-        self._clear_workbench()
-        self.disk_summary.setText(
-            f"{device.model or device.name} · {human_bytes(device.capacity_bytes)} · "
-            f"{device.bus_type or device.protocol or '总线未知'} · 正在读取……"
-        )
-        self.statusBar().showMessage(f"正在读取：{device.model or device.name}")
-
-        root_item = self.device_items.get(index)
-        if root_item is not None:
-            self._building_tree = True
-            root_item.takeChildren()
-            self._building_tree = False
-
-        cached_payload = getattr(device, "cached_payload", None)
+        cached_payload = None if force_refresh else getattr(device, "cached_payload", None)
         if cached_payload is not None:
             device.cached_payload = None
-        self._read_thread = DeviceReadWorker(device, cached_payload, self)
-        self._read_thread.data_ready.connect(self._on_device_data_ready)
-        self._read_thread.failed.connect(self._on_device_read_failed)
-        self._read_thread.finished.connect(self._on_read_thread_finished)
-        self._read_thread.finished.connect(self._read_thread.deleteLater)
-        self._read_thread.start()
 
-    def _on_device_data_ready(self, payload, layout, smart_error, hfsplus_reports):
-        device = self._reading_device
-        if device is None:
+        worker = DeviceReadWorker(device, cached_payload, self)
+        self._read_workers[index] = worker
+        worker.data_ready.connect(
+            lambda payload, layout, smart_error, reports, disk_index=index, worker_ref=worker:
+                self._on_device_data_ready(
+                    disk_index, worker_ref, payload, layout, smart_error, reports
+                )
+        )
+        worker.failed.connect(
+            lambda message, disk_index=index:
+                self._on_device_read_failed(disk_index, message)
+        )
+        worker.finished.connect(
+            lambda disk_index=index, worker_ref=worker:
+                self._on_read_thread_finished(disk_index, worker_ref)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_device_data_ready(
+        self, index, worker, payload, layout, smart_error, hfsplus_reports
+    ):
+        # Cache every completed disk result, even when the user has switched away.
+        # Stale worker responses must never overwrite another disk's visible state.
+        if self._read_workers.get(index) is not worker:
+            return
+        result = {
+            "payload": payload or {},
+            "layout": layout or {},
+            "smart_error": smart_error or "",
+            "hfsplus_reports": hfsplus_reports or [],
+        }
+        self._device_cache[index] = result
+        self._read_errors.pop(index, None)
+
+        if index != self.current_device_index:
+            return
+        self._display_device_result(index, result)
+
+    def _display_device_result(self, index: int, result: dict[str, Any]):
+        if index < 0 or index >= len(self.devices) or index != self.current_device_index:
             return
 
-        payload = payload or {}
+        device = self.devices[index]
+        payload = result.get("payload") or {}
+        layout = result.get("layout") or {}
+        smart_error = result.get("smart_error") or ""
+        hfsplus_reports = result.get("hfsplus_reports") or []
+
         self.current_payload = payload or None
-        self.current_layout = layout or {}
-        self.hfsplus_reports = hfsplus_reports or []
+        self.current_layout = layout
+        self.hfsplus_reports = hfsplus_reports
 
         self._update_disk_summary(device, payload, layout, smart_error)
         self._populate_disk_map(layout, device)
@@ -589,7 +692,7 @@ class MainWindow(QMainWindow):
         self._populate_partition_tree(layout)
         self._populate_file_browser(self.hfsplus_reports)
 
-        parts = (layout or {}).get("partitions", [])
+        parts = layout.get("partitions", [])
         if parts:
             self._select_partition(0)
         else:
@@ -599,39 +702,13 @@ class MainWindow(QMainWindow):
             f"读取完成：{device.model or device.name}；"
             f"{len(parts)} 个分区；SMART {'可用' if payload else '不可用'}。"
         )
-        self.statusBar().showMessage(message)
+        self.statusBar().showMessage(message + " 单击切换缓存；双击重新读取。")
         self.disk_summary.setText(
-            self.disk_summary.text().replace("正在读取……", "读取完成")
+            f"{device.model or device.name} · {human_bytes(device.capacity_bytes)} · "
+            f"{device.bus_type or device.protocol or '总线未知'} · "
+            f"{layout.get('partition_table_style') or device.partition_style or '未知分区表'} · 读取完成"
         )
 
-    def _populate_disk_map(self, layout, device):
-        layout = layout or {}
-        parts = layout.get("partitions", []) or []
-        total = int(layout.get("disk_size") or getattr(device, "capacity_bytes", 0) or 0)
-        if total <= 0:
-            total = sum(max(int(part.get("Size") or 0), 0) for part in parts)
-
-        allocated = sum(max(int(part.get("Size") or 0), 0) for part in parts)
-        unallocated = max(total - allocated, 0)
-        overallocated = allocated > total if total > 0 else False
-
-        # PartitionMap paints colored allocated/used areas, white free space,
-        # dark-gray unallocated space, and light-gray unknown space.
-        self.partition_map.set_data(parts, total)
-
-        summary = (
-            f"磁盘总容量：{human_bytes(total)}　"
-            f"已分配：{human_bytes(allocated)}　"
-            f"未分配：{human_bytes(unallocated)}"
-        )
-        if overallocated:
-            summary += "　警告：分区容量合计超过磁盘容量，请检查分区表是否存在重叠。"
-        self.partition_capacity_summary.setText(summary)
-        self.partition_legend.setText(
-            f"分区 {len(parts)} 个 · 彩色为已用空间，白色为分区可用空间，"
-            "深灰为未分配空间，浅灰表示空间使用情况未知。"
-            "极小分区按最小可视宽度显示，实际容量以分区表为准。"
-        )
 
     def _update_disk_summary(self, device, payload, layout, smart_error):
         disk_number = layout.get("disk_number", device.windows_disk_number)
@@ -937,16 +1014,32 @@ class MainWindow(QMainWindow):
                 "磁盘与分区信息仍可继续读取。"
             )
 
-    def _on_device_read_failed(self, message):
+    def _on_device_read_failed(self, index, message):
+        self._read_errors[index] = str(message)
+        if index != self.current_device_index:
+            return
+
+        cached = self._device_cache.get(index)
+        if cached is not None:
+            self._display_device_result(index, cached)
+            self.statusBar().showMessage(
+                f"重新读取失败，继续显示上次成功结果：{message}"
+            )
+            return
+
         self.disk_summary.setText(f"读取失败：{message}")
         self.file_summary.setText(message)
         self.raw.setPlainText(message)
         self.statusBar().showMessage("磁盘信息读取失败")
 
-    def _on_read_thread_finished(self):
-        self.device_list.setEnabled(True)
-        self._read_thread = None
-        self._reading_device = None
+    def _on_read_thread_finished(self, index, worker):
+        if self._read_workers.get(index) is worker:
+            self._read_workers.pop(index, None)
+        if index == self.current_device_index and index in self._read_errors:
+            self.statusBar().showMessage(
+                f"读取失败：{self._read_errors[index]}；双击磁盘可重试。"
+            )
+
 
     def _on_discovery_failed(self, message):
         self.scan_action.setEnabled(True)
@@ -981,7 +1074,10 @@ class MainWindow(QMainWindow):
 
 
     def closeEvent(self, event):
-        for worker in (self._read_thread, self._discovery_thread):
+        workers = list(self._read_workers.values())
+        if self._discovery_thread is not None:
+            workers.append(self._discovery_thread)
+        for worker in workers:
             if worker is not None and worker.isRunning():
                 worker.wait(3000)
         super().closeEvent(event)
