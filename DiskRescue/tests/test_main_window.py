@@ -1,7 +1,7 @@
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -149,7 +149,8 @@ class MainWindowConstructionTests(unittest.TestCase):
 
     def test_stale_worker_result_is_cached_but_not_displayed(self):
         window = self.make_window()
-        worker = object()
+        worker = Mock()
+        worker.isRunning.return_value = False
         layout = {"disk_number": 0, "disk_size": 1000, "partitions": []}
         try:
             window.current_device_index = 1
