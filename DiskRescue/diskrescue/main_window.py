@@ -210,14 +210,12 @@ class PartitionMap(QWidget):
                 # Light gray = partition found, but used/free split unavailable.
                 painter.fillRect(x, bar.top(), seg_w, bar.height(), QColor("#B8BEC7"))
 
-            # Strong left/right separators keep tiny partitions recognizable.
-            # Widths below the minimum are visually enlarged by the geometry helper.
-            painter.setPen(QPen(QColor("#263242"), 1))
-            painter.drawLine(x, bar.top(), x, bar.bottom())
-            painter.drawLine(x + seg_w - 1, bar.top(), x + seg_w - 1, bar.bottom())
-            if seg_w <= 30:
-                painter.setPen(QPen(QColor("#152238"), 1))
-                painter.drawLine(x + seg_w // 2, bar.top(), x + seg_w // 2, bar.bottom())
+            # Draw one separator at the start of each partition after the first.
+            # The outer bar outline supplies the first/last outer edges.
+            # Do not draw artificial center marks inside minimum-width partitions.
+            if index > 0:
+                painter.setPen(QPen(QColor("#263242"), 1))
+                painter.drawLine(x, bar.top(), x, bar.bottom())
 
             drive = str(part.get("DriveLetter") or "").strip().upper()
             if drive and seg_w >= 72:
